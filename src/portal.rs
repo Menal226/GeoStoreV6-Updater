@@ -285,6 +285,14 @@ impl Portal {
         self.load_roles()
     }
 
+    /// A newer login to the same account ends this session, and the portal then never answers its API calls, so the session is checked on a page that redirects instead.
+    pub fn ensure_session(&mut self) -> Result<()> {
+        match self.load_roles() {
+            Err(e) if is_session_expired(&e) => self.relogin(),
+            r => r,
+        }
+    }
+
     fn relogin(&mut self) -> Result<()> {
         let (u, p) = self
             .creds

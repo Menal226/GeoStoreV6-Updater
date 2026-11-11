@@ -513,7 +513,7 @@ impl App {
         let busy = self.op.is_none() && worker::operation_running();
         let finished = self.bg_busy && !busy;
         self.bg_busy = busy;
-        if (checked || finished) && self.logged_in && !self.checking && self.op.is_none() {
+        if (checked || finished) && !busy && self.logged_in && !self.checking && self.op.is_none() {
             self.checking = true;
             self.send(Cmd::Check);
         }

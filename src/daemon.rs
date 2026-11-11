@@ -191,9 +191,12 @@ fn scheduler() {
             let due = cfg.auto_check
                 && !no_creds
                 && Local::now() >= cfg.next_check(State::load().last_auto_check)
-                && retry_at.is_none_or(|t| Instant::now() >= t);
+                && retry_at.is_none_or(|t| Instant::now() >= t)
+                && !worker::operation_running();
             if forced && no_creds {
                 toast("Kontrola aktualizací není možná", "Otevřete GeoStore Updater a uložte přihlášení k portálu.");
+            } else if forced && worker::operation_running() {
+                toast("Kontrola aktualizací není možná", "Právě probíhá instalace aktualizací.");
             } else if forced || due {
                 match check(&cfg, forced, &mut announced) {
                     Ok(()) => retry_at = None,

@@ -167,7 +167,7 @@ impl App {
                 self.actions.push(Action::Ask(Confirm::UpdateAll(pending.clone())));
             }
             let label = if checking { "Kontroluji…" } else { "Zkontrolovat" };
-            if !busy && widgets::button(ui, Some(icon::REFRESH), label, Btn::Secondary, !checking).clicked() {
+            if !busy && widgets::button(ui, Some(icon::REFRESH), label, Btn::Secondary, !checking && !self.bg_busy).clicked() {
                 self.actions.push(Action::Check);
             }
         });

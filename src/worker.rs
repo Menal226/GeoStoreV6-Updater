@@ -169,15 +169,36 @@ struct Worker {
 }
 
 /// Held while packages are being installed, so the window and the tray process never install at the same time.
-fn operation_lock() -> Option<std::fs::File> {
+fn exclusive(name: &str) -> std::io::Result<std::fs::File> {
     use std::os::windows::fs::OpenOptionsExt;
     std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .share_mode(0)
-        .open(paths::data_dir().join("operation.lock"))
-        .ok()
+        .open(paths::data_dir().join(name))
+}
+
+fn operation_lock() -> Option<std::fs::File> {
+    exclusive("operation.lock").ok()
+}
+
+/// The portal keeps one session per account, so the window and the tray process take turns instead of ending each other's.
+fn portal_lock() -> Result<Option<std::fs::File>> {
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match exclusive("portal.lock") {
+            Ok(f) => return Ok(Some(f)),
+            Err(e) if e.raw_os_error() == Some(ERROR_SHARING_VIOLATION) => {
+                if Instant::now() >= deadline {
+                    bail!("Portál právě používá kontrola nebo instalace na pozadí. Zkuste to prosím za chvíli.");
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            Err(_) => return Ok(None),
+        }
+    }
 }
 
 pub fn operation_running() -> bool {
@@ -242,7 +263,7 @@ impl Worker {
     }
 
     fn login(&mut self, user: String, pass: String, remember: bool) {
-        let result = Portal::new().and_then(|mut p| p.login(&user, &pass).map(|_| p));
+        let result = portal_lock().and_then(|_lock| Portal::new().and_then(|mut p| p.login(&user, &pass).map(|_| p)));
         match result {
             Ok(p) => {
                 if remember {
@@ -314,7 +335,10 @@ impl Worker {
             .portal
             .take()
             .ok_or_else(|| anyhow!("Nejste přihlášeni k portálu."))?;
-        let result = f(&mut portal, &self.em);
+        let result = portal_lock().and_then(|_lock| {
+            portal.ensure_session()?;
+            f(&mut portal, &self.em)
+        });
         self.portal = Some(portal);
         result
     }
