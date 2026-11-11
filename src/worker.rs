@@ -6,8 +6,8 @@ use crate::local::{self, DavkaLog};
 use crate::logfile::{self, Level, LogLine};
 use crate::logic::{self, PackageRow};
 use crate::paths;
-use crate::portal::{self, Cancelled, Portal, RemoteFile};
-use anyhow::{anyhow, Context, Result};
+use crate::portal::{self, Cancelled, Licence, Portal, RemoteFile};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Local};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -30,11 +30,13 @@ pub struct CleanPlan {
     pub modules: Vec<String>,
     pub hasp: bool,
     pub vcredist: bool,
+    #[serde(default)]
+    pub licence: Option<String>,
 }
 
 impl CleanPlan {
     pub fn is_empty(&self) -> bool {
-        !self.editor && self.modules.is_empty()
+        !self.editor && self.modules.is_empty() && self.licence.is_none()
     }
 }
 
@@ -45,6 +47,7 @@ pub enum Cmd {
     Install { keys: Vec<String>, opts: InstallOptions },
     CleanInstall { plan: CleanPlan, opts: InstallOptions },
     MarkCurrent(String),
+    Licences,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -70,6 +73,7 @@ pub enum Event {
     WaitingForGeoStore(bool),
     Log(LogLine),
     OpFinished { ok: bool, summary: String },
+    Licences(Result<Vec<Licence>, String>),
 }
 
 #[derive(Clone)]
@@ -151,6 +155,7 @@ struct Report {
 struct Extras {
     hasp: bool,
     vcredist: bool,
+    licence: Option<String>,
 }
 
 struct Worker {
@@ -188,12 +193,19 @@ impl Worker {
             Cmd::Check => self.check(),
             Cmd::Install { keys, opts } => {
                 let jobs = self.update_jobs(&keys, &opts);
-                self.run_operation("Instalace aktualizací", jobs, opts, Extras { hasp: false, vcredist: false });
+                self.run_operation("Instalace aktualizací", jobs, opts, Extras { hasp: false, vcredist: false, licence: None });
             }
             Cmd::CleanInstall { plan, opts } => {
                 let jobs = self.clean_jobs(&plan);
-                let extras = Extras { hasp: plan.hasp, vcredist: plan.vcredist };
+                let extras = Extras { hasp: plan.hasp, vcredist: plan.vcredist, licence: plan.licence.clone() };
                 self.run_operation("Nová instalace", jobs, opts, extras);
+            }
+            Cmd::Licences => {
+                let result = self.licman().and_then(|mut l| l.list_licences());
+                if let Err(e) = &result {
+                    self.em.log(Level::Warn, format!("Seznam licencí se nepodařilo načíst: {}", friendly_error(e)));
+                }
+                self.em.send(Event::Licences(result.map_err(|e| friendly_error(&e))));
             }
             Cmd::MarkCurrent(key) => {
                 if let Some(row) = self.rows().into_iter().find(|r| r.key == key) {
@@ -346,7 +358,7 @@ impl Worker {
         self.cancel.store(false, Ordering::Relaxed);
         self.em.send(Event::OpStarted { title: title.to_string() });
         self.em.log(Level::Info, format!("{title}: zahájeno."));
-        let result = if jobs.is_empty() {
+        let result = if jobs.is_empty() && extras.licence.is_none() {
             Err(anyhow!("Nebyl vybrán žádný balíček k instalaci."))
         } else {
             self.run_jobs(jobs, &opts, extras)
@@ -479,7 +491,49 @@ impl Worker {
             report.lines.push("• Ovladač HW klíče: instalátor nebyl v balíčcích nalezen".into());
             report.warnings += 1;
         }
+        if let Some(guid) = &extras.licence {
+            let steps = jobs.len().max(1);
+            self.progress(steps, steps, "Licence", "Stahování licenčního souboru ze systému licman", None, "", false);
+            match self.install_licence(guid) {
+                Ok(line) => report.lines.push(line),
+                Err(e) => {
+                    let msg = friendly_error(&e);
+                    self.em.log(Level::Warn, format!("Licenční soubor se nepodařilo nainstalovat: {msg}"));
+                    report.lines.push(format!("• Licence: {msg}"));
+                    report.warnings += 1;
+                }
+            }
+        }
         Ok(report)
+    }
+
+    fn licman(&self) -> Result<Portal> {
+        let (user, pass) = self
+            .portal
+            .as_ref()
+            .and_then(Portal::credentials)
+            .ok_or_else(|| anyhow!("Nejste přihlášeni k portálu."))?;
+        let mut licman = Portal::licman()?;
+        licman
+            .login(&user, &pass)
+            .context("Přihlášení do systému licman se nezdařilo")?;
+        Ok(licman)
+    }
+
+    fn install_licence(&self, guid: &str) -> Result<String> {
+        let dir = PathBuf::from(paths::GEOSTORE_DIR);
+        if !dir.is_dir() {
+            bail!("GeoStore V6 není nainstalován, licenční soubor není kam uložit.");
+        }
+        let key = self.licman()?.download_licence(guid)?;
+        let dest = dir.join("gsfl.lic");
+        if std::fs::read_to_string(&dest).is_ok_and(|old| old.trim() == key) {
+            self.em.log(Level::Info, format!("Licenční soubor {} je aktuální.", dest.display()));
+            return Ok("• Licence: licenční soubor je aktuální".into());
+        }
+        std::fs::write(&dest, &key).with_context(|| format!("Nelze zapsat {}", dest.display()))?;
+        self.em.log(Level::Info, format!("Licenční soubor uložen do {}.", dest.display()));
+        Ok("• Licence: plovoucí licence uložena (gsfl.lic)".into())
     }
 
     fn wait_for_geostore(&self) -> Result<()> {

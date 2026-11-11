@@ -163,6 +163,46 @@ pub fn checkbox(ui: &mut Ui, checked: &mut bool, text: impl Into<WidgetText>, en
     }
 }
 
+pub fn radio(ui: &mut Ui, selected: bool, title: &str, detail: &str, enabled: bool) -> Response {
+    let text_w = (ui.available_width() - CHECK_SIZE - CHECK_GAP).max(40.0);
+    let title_g = WidgetText::from(RichText::new(title).size(14.0)).into_galley(ui, Some(TextWrapMode::Truncate), text_w, egui::TextStyle::Body);
+    let detail_g = WidgetText::from(RichText::new(detail).size(13.0)).into_galley(ui, Some(TextWrapMode::Wrap), text_w, egui::TextStyle::Body);
+    let line_h = title_g.size().y.max(CHECK_SIZE + 2.0);
+    let height = line_h + 2.0 + detail_g.size().y;
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let (rect, mut resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), sense);
+    if enabled && resp.clicked() && !selected {
+        resp.mark_changed();
+    }
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, enabled, selected, title_g.text()));
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let center = egui::pos2(rect.left() + CHECK_SIZE / 2.0, rect.top() + line_h / 2.0);
+        let r = CHECK_SIZE / 2.0;
+        let hovered = enabled && resp.hovered();
+        if selected {
+            let fill = if !enabled { DISABLED_FILL } else if hovered { ACCENT_HOVER } else { ACCENT };
+            painter.circle_filled(center, r, fill);
+            painter.circle_filled(center, 3.5, if enabled { Color32::WHITE } else { DISABLED_TEXT });
+        } else {
+            let border = if !enabled { CONTROL_BORDER } else if hovered { MUTED } else { CHECK_BORDER };
+            painter.circle(center, r - 0.5, if enabled { CARD } else { RAISED }, Stroke::new(1.0_f32, border));
+        }
+        if resp.has_focus() {
+            painter.circle_stroke(center, r + 3.0, Stroke::new(1.5_f32, ACCENT));
+        }
+        let x = rect.left() + CHECK_SIZE + CHECK_GAP;
+        let title_y = center.y - title_g.size().y / 2.0;
+        painter.galley(egui::pos2(x, title_y), title_g, if enabled { TEXT } else { DISABLED_TEXT });
+        painter.galley(egui::pos2(x, rect.top() + line_h + 2.0), detail_g, if enabled { MUTED } else { DISABLED_TEXT });
+    }
+    if enabled {
+        resp.on_hover_cursor(CursorIcon::PointingHand)
+    } else {
+        resp
+    }
+}
+
 /// ComboBox icon: a small chevron instead of egui's filled triangle.
 pub fn chevron(ui: &Ui, rect: Rect, _visuals: &egui::style::WidgetVisuals, open: bool, _above: egui::AboveOrBelow) {
     let c = rect.center();

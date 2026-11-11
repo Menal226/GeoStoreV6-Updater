@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub const BASE: &str = "https://portal.geostore.cz/v6/support/framework/";
+pub const LICMAN: &str = "https://install.geovap.cz/licman/app/framework/";
 const API_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug)]
@@ -60,8 +61,45 @@ pub struct RemoteFile {
     pub folder: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct Licence {
+    pub guid: String,
+    pub project: String,
+    pub company: String,
+    pub float_max: String,
+    pub float_used: String,
+    pub valid_to: String,
+    pub trial: bool,
+    code: String,
+}
+
+impl Licence {
+    pub fn title(&self) -> String {
+        if self.project.is_empty() { "Licence GeoStore V6".into() } else { self.project.clone() }
+    }
+
+    pub fn detail(&self) -> String {
+        let mut parts = Vec::new();
+        if !self.company.is_empty() {
+            parts.push(self.company.clone());
+        }
+        if !self.float_max.is_empty() {
+            parts.push(format!("plovoucí {} / {}", if self.float_used.is_empty() { "0" } else { &self.float_used }, self.float_max));
+        }
+        parts.push(match self.valid_to.split_whitespace().next() {
+            Some(d) => format!("platnost do {d}"),
+            None => "bez omezení platnosti".into(),
+        });
+        if self.trial {
+            parts.push("zkušební".into());
+        }
+        parts.join(" · ")
+    }
+}
+
 pub struct Portal {
     client: Client,
+    base: &'static str,
     creds: Option<(String, String)>,
     pub user_name: String,
     pub roles: Vec<Role>,
@@ -69,6 +107,14 @@ pub struct Portal {
 
 impl Portal {
     pub fn new() -> Result<Self> {
+        Self::with_base(BASE)
+    }
+
+    pub fn licman() -> Result<Self> {
+        Self::with_base(LICMAN)
+    }
+
+    fn with_base(base: &'static str) -> Result<Self> {
         let client = Client::builder()
             .cookie_store(true)
             .user_agent(concat!("GeoStoreUpdater/", env!("CARGO_PKG_VERSION")))
@@ -77,10 +123,117 @@ impl Portal {
             .build()?;
         Ok(Self {
             client,
+            base,
             creds: None,
             user_name: String::new(),
             roles: Vec::new(),
         })
+    }
+
+    pub fn credentials(&self) -> Option<(String, String)> {
+        self.creds.clone()
+    }
+
+    pub fn list_licences(&mut self) -> Result<Vec<Licence>> {
+        let shape = licence_shape();
+        let mut out: Vec<Licence> = Vec::new();
+        for role in self.roles.clone() {
+            let v = self.call(json!({
+                "action": "mobile.role",
+                "user_seat": "",
+                "user_role": role.name,
+                "folder_id": ""
+            }))?;
+            let mut folders = Vec::new();
+            collect_all_folders(v.get("folders"), &mut folders);
+            for (folder, sql) in folders {
+                if !sql.contains("licen") {
+                    continue;
+                }
+                let v = self.call(json!({
+                    "action": "mobile.review",
+                    "user_seat": "",
+                    "user_role": role.name,
+                    "folder_id": folder,
+                    "parameters": [
+                        {"name": "page", "type": "N", "value": 1},
+                        {"name": "count", "type": "N", "value": 200}
+                    ]
+                }))?;
+                let data = &v["table"]["data"];
+                let cols: Vec<String> = data["columns"]
+                    .as_array()
+                    .map(|a| a.iter().map(|c| c.as_str().unwrap_or("").to_lowercase()).collect())
+                    .unwrap_or_default();
+                let idx = |n: &str| cols.iter().position(|c| c == n);
+                let (Some(i_code), Some(i_key)) = (idx("code"), idx("floating_guid")) else {
+                    continue;
+                };
+                for row in data["rows"].as_array().cloned().unwrap_or_default() {
+                    let get = |name: &str| -> String {
+                        match idx(name).and_then(|i| row.get(i)) {
+                            Some(Value::String(s)) => s.trim().to_string(),
+                            Some(Value::Null) | None => String::new(),
+                            Some(o) => o.to_string(),
+                        }
+                    };
+                    let prod = get("prod_name");
+                    if !prod.is_empty() && !prod.to_uppercase().contains("GSV6") {
+                        continue;
+                    }
+                    let key = row.get(i_key).and_then(Value::as_str).unwrap_or("").trim().to_string();
+                    if !shape.is_match(&key) {
+                        continue;
+                    }
+                    let guid = key.split('|').next().unwrap_or_default().to_lowercase();
+                    if out.iter().any(|l| l.guid == guid) {
+                        continue;
+                    }
+                    let trial = get("trial").eq_ignore_ascii_case("true") || get("trial_desc").eq_ignore_ascii_case("ano");
+                    out.push(Licence {
+                        guid,
+                        project: html_escape::decode_html_entities(&get("project")).to_string(),
+                        company: html_escape::decode_html_entities(&get("companyname")).to_string(),
+                        float_max: get("float_lic_max_count"),
+                        float_used: get("used_float_lic_count"),
+                        valid_to: get("valid_to"),
+                        trial,
+                        code: row.get(i_code).and_then(Value::as_str).unwrap_or("").to_string(),
+                    });
+                }
+            }
+        }
+        out.sort_by_key(|l| l.trial);
+        Ok(out)
+    }
+
+    pub fn download_licence(&mut self, guid: &str) -> Result<String> {
+        let guid = guid.to_lowercase();
+        let Some(lic) = self.list_licences()?.into_iter().find(|l| l.guid == guid) else {
+            bail!("Vybraná licence už v systému licman není k dispozici.");
+        };
+        let params = json!([{"name": "selection$code", "type": "PKC", "value": lic.code}]);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(params.to_string());
+        let resp = self
+            .client
+            .get(format!("{}AsyncJSON.ashx", self.base))
+            .query(&[
+                ("action", "databaseFileDownload"),
+                ("resourceId", "resDownloadLicFile"),
+                ("output", "gsfl.lic"),
+                ("params", b64.as_str()),
+            ])
+            .timeout(API_TIMEOUT)
+            .send()
+            .context("Nelze se spojit se serverem install.geovap.cz")?;
+        if !resp.status().is_success() {
+            bail!("Licman při stahování licence vrátil chybu HTTP {}.", resp.status());
+        }
+        let text = resp.text()?.trim().to_string();
+        if !licence_shape().is_match(&text) || !text.to_lowercase().starts_with(&guid) {
+            bail!("Licman nevydal platný licenční soubor.");
+        }
+        Ok(text)
     }
 
     pub fn login(&mut self, user: &str, pass: &str) -> Result<()> {
@@ -95,7 +248,7 @@ impl Portal {
         });
         let resp = self
             .client
-            .post(format!("{BASE}AsyncJSON.ashx"))
+            .post(format!("{}AsyncJSON.ashx", self.base))
             .json(&body)
             .timeout(API_TIMEOUT)
             .send()
@@ -143,7 +296,7 @@ impl Portal {
     fn load_roles(&mut self) -> Result<()> {
         let resp = self
             .client
-            .get(format!("{BASE}Overview.aspx"))
+            .get(format!("{}Overview.aspx", self.base))
             .timeout(API_TIMEOUT)
             .send()?;
         if resp.url().as_str().to_lowercase().contains("login.html") {
@@ -173,7 +326,7 @@ impl Portal {
     fn api(&self, body: &Value) -> Result<Value> {
         let resp = self
             .client
-            .post(format!("{BASE}AsyncJSON.ashx"))
+            .post(format!("{}AsyncJSON.ashx", self.base))
             .json(body)
             .timeout(API_TIMEOUT)
             .send()
@@ -316,7 +469,7 @@ impl Portal {
         for attempt in 0..2 {
             let html = self
                 .client
-                .post(format!("{BASE}Dialog.aspx"))
+                .post(format!("{}Dialog.aspx", self.base))
                 .form(&[("pars", b64.as_str())])
                 .timeout(API_TIMEOUT)
                 .send()
@@ -324,7 +477,7 @@ impl Portal {
                 .text()?;
             if let Some(c) = re.captures(&html) {
                 let link = html_escape::decode_html_entities(&c[1]).to_string();
-                return Ok(format!("{BASE}{link}"));
+                return Ok(format!("{}{link}", self.base));
             }
             if attempt == 0 {
                 self.relogin()?;
@@ -430,6 +583,24 @@ fn collect_folders(v: Option<&Value>, out: &mut Vec<String>) {
             }
         }
         collect_folders(f.get("childs"), out);
+    }
+}
+
+fn licence_shape() -> Regex {
+    Regex::new(r"^[0-9A-Fa-f-]{36}\|[A-Za-z0-9+/]+=*$").unwrap()
+}
+
+fn collect_all_folders(v: Option<&Value>, out: &mut Vec<(String, String)>) {
+    let Some(arr) = v.and_then(Value::as_array) else {
+        return;
+    };
+    for f in arr {
+        let id = f.get("clientId").or_else(|| f.get("name")).and_then(Value::as_str);
+        let sql = f.get("sql").and_then(Value::as_str).unwrap_or("").to_lowercase();
+        if let Some(id) = id {
+            out.push((id.to_string(), sql));
+        }
+        collect_all_folders(f.get("childs"), out);
     }
 }
 

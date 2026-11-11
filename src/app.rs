@@ -3,6 +3,7 @@ use crate::config::Config;
 use crate::fmt;
 use crate::logfile::{self, LogLine};
 use crate::logic::{self, PackageRow, Status};
+use crate::portal::Licence;
 use crate::theme::{self, *};
 use crate::widgets::{self, icon, Btn};
 use crate::worker::{self, CleanPlan, Cmd, Event, InstallOptions, Progress};
@@ -108,6 +109,17 @@ pub struct WizardState {
     pub modules: BTreeMap<String, bool>,
     pub hasp: bool,
     pub vcredist: bool,
+    pub licence: bool,
+    pub licence_guid: Option<String>,
+}
+
+#[derive(Default)]
+pub enum Licences {
+    #[default]
+    Idle,
+    Loading,
+    Ready(Vec<Licence>),
+    Failed(String),
 }
 
 pub enum Action {
@@ -153,6 +165,7 @@ pub struct App {
     pub countdown: Option<Instant>,
     countdown_dismissed: bool,
     pub wizard: WizardState,
+    pub licences: Licences,
     pub confirm: Option<Confirm>,
     pub actions: Vec<Action>,
     pub task_installed: bool,
@@ -217,6 +230,7 @@ impl App {
             countdown: None,
             countdown_dismissed: false,
             wizard: WizardState::default(),
+            licences: Licences::Idle,
             confirm: None,
             actions: Vec::new(),
             task_installed: scheduler::is_installed(),
@@ -237,7 +251,20 @@ impl App {
         app
     }
 
-    /// Debug-only screenshot aid. GSU_PREVIEW is a comma list: admin (install controls on), op (sample progress card), confirm (open the update dialog), view=wizard|history|settings.
+    fn preview_licences(list: &mut Vec<Licence>) {
+        let wanted = std::env::var("GSU_PREVIEW").is_ok_and(|m| m.split(',').any(|o| o.trim() == "licences"));
+        let Some(first) = list.first().cloned().filter(|_| wanted) else { return };
+        for (i, (project, valid, trial)) in [("GSV6 - Pobočka Zlín", "31.12.2027", false), ("GSV6 - zkušební", "30.11.2026", true)].into_iter().enumerate() {
+            let mut l = first.clone();
+            l.guid = format!("{}-preview{i}", l.guid);
+            l.project = project.into();
+            l.valid_to = valid.into();
+            l.trial = trial;
+            list.push(l);
+        }
+    }
+
+    /// Debug-only screenshot aid. GSU_PREVIEW is a comma list: admin (install controls on), op (sample progress card), confirm (open the update dialog), licences (two extra fake licences), view=wizard|history|settings.
     fn apply_preview(&mut self) {
         let Ok(mode) = std::env::var("GSU_PREVIEW") else { return };
         self.elevated = true;
@@ -267,7 +294,7 @@ impl App {
         }
     }
 
-    fn send(&self, cmd: Cmd) {
+    pub(crate) fn send(&self, cmd: Cmd) {
         let _ = self.tx.send(cmd);
     }
 
@@ -364,6 +391,8 @@ impl App {
                         .collect(),
                     hasp: plan.hasp,
                     vcredist: plan.vcredist,
+                    licence: plan.licence.is_some(),
+                    licence_guid: plan.licence.clone(),
                 };
                 self.view = View::Wizard;
                 self.actions.push(Action::Ask(Confirm::CleanInstall(plan)));
@@ -405,6 +434,7 @@ impl App {
                 }
                 Event::LoggedOut => {
                     self.logged_in = false;
+                    self.licences = Licences::Idle;
                     self.rows.clear();
                     self.creds_stored = false;
                     self.countdown = None;
@@ -449,6 +479,21 @@ impl App {
                         let excess = self.log.len() - MAX_LOG_LINES;
                         self.log.drain(..excess);
                     }
+                }
+                Event::Licences(result) => {
+                    self.licences = match result {
+                        Ok(mut list) => {
+                            if cfg!(debug_assertions) {
+                                Self::preview_licences(&mut list);
+                            }
+                            let keep = self.wizard.licence_guid.as_ref().is_some_and(|g| list.iter().any(|l| &l.guid == g));
+                            if !keep {
+                                self.wizard.licence_guid = list.first().map(|l| l.guid.clone());
+                            }
+                            Licences::Ready(list)
+                        }
+                        Err(e) => Licences::Failed(e),
+                    };
                 }
                 Event::OpFinished { ok, summary } => {
                     self.op = None;
@@ -624,6 +669,7 @@ impl App {
                 modules: vec![key],
                 hasp: false,
                 vcredist: false,
+                licence: None,
             })),
             Confirm::CleanInstall(plan) => self.actions.push(Action::CleanInstall(plan)),
             Confirm::Logout => self.send(Cmd::Logout),
@@ -691,6 +737,13 @@ impl App {
                     lines.push(("GeoStore V6".to_string(), String::new()));
                 }
                 lines.extend(plan.modules.iter().map(|k| (self.names(std::slice::from_ref(k)), String::new())));
+                if let Some(guid) = &plan.licence {
+                    let name = match &self.licences {
+                        Licences::Ready(list) => list.iter().find(|l| &l.guid == guid).map(|l| l.title()),
+                        _ => None,
+                    };
+                    lines.push(("Licence".to_string(), name.unwrap_or_else(|| "gsfl.lic z licman".into())));
+                }
                 (
                     "Spustit novou instalaci?".into(),
                     "Nainstaluje se:".into(),
