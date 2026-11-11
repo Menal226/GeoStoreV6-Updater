@@ -857,7 +857,7 @@ impl App {
             .exact_width(240.0)
             .resizable(false)
             .show_separator_line(true)
-            .frame(Frame::new().fill(SIDEBAR).inner_margin(Margin { left: 12, right: 12, top: 20, bottom: 16 }))
+            .frame(Frame::new().fill(SIDEBAR).inner_margin(Margin { left: 12, right: 12, top: 20, bottom: 14 }))
             .show(ctx, |ui| {
                 ui.add_space(4.0);
                 ui.spacing_mut().item_spacing.y = 2.0;
@@ -882,14 +882,13 @@ impl App {
                     row.add(egui::Label::new(RichText::new(&self.user).size(14.0).color(TEXT)).truncate());
                     row.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.add_space(14.0);
-                        let resp = ui
-                            .add_enabled(!busy, egui::Button::new(RichText::new("Odhlásit").size(13.0).color(MUTED)).frame(false))
+                        let resp = widgets::button_ex(ui, Some(icon::SIGN_OUT), "Odhlásit", Btn::Secondary, !busy, 0.0, 28.0)
                             .on_hover_cursor(egui::CursorIcon::PointingHand);
                         if resp.clicked() {
                             self.actions.push(Action::Ask(Confirm::Logout));
                         }
                     });
-                    ui.add_space(8.0);
+                    ui.add_space(10.0);
                     ui.separator();
                 });
             });
@@ -1038,7 +1037,7 @@ impl eframe::App for App {
         } else {
             self.ui_sidebar(ctx);
             egui::CentralPanel::default()
-                .frame(Frame::new().fill(BG).inner_margin(Margin { left: 32, right: 32, top: 28, bottom: 20 }))
+                .frame(Frame::new().fill(BG).inner_margin(Margin { left: 32, right: 32, top: 28, bottom: if self.view == View::Wizard { 0 } else { 20 } }))
                 .show(ctx, |ui| match self.view {
                     View::Dashboard => self.ui_dashboard(ui),
                     View::Wizard => self.ui_wizard(ui),
