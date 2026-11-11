@@ -240,9 +240,18 @@ impl App {
         app
     }
 
+    fn preview(option: &str) -> bool {
+        cfg!(debug_assertions) && std::env::var("GSU_PREVIEW").is_ok_and(|m| m.split(',').any(|o| o.trim() == option))
+    }
+
     fn preview_licences(list: &mut Vec<Licence>) {
-        let wanted = std::env::var("GSU_PREVIEW").is_ok_and(|m| m.split(',').any(|o| o.trim() == "licences"));
-        let Some(first) = list.first().cloned().filter(|_| wanted) else { return };
+        if Self::preview("anon") {
+            for l in list.iter_mut() {
+                l.company = "Geodetická kancelář s.r.o.".into();
+                l.project = "GSV6 - Geodetická kancelář".into();
+            }
+        }
+        let Some(first) = list.first().cloned().filter(|_| Self::preview("licences")) else { return };
         for (i, (project, valid, trial)) in [("GSV6 - Pobočka Zlín", "31.12.2027", false), ("GSV6 - zkušební", "30.11.2026", true)].into_iter().enumerate() {
             let mut l = first.clone();
             l.guid = format!("{}-preview{i}", l.guid);
@@ -253,12 +262,17 @@ impl App {
         }
     }
 
-    /// Debug-only screenshot aid. GSU_PREVIEW is a comma list: admin (install controls on), op (sample progress card), confirm (open the update dialog), licences (two extra fake licences), view=wizard|history|settings.
+    /// Debug-only screenshot aid. GSU_PREVIEW is a comma list: admin (install controls on), op (sample progress card), confirm (open the update dialog), licences (two extra fake licences), anon (sample user and company names), login (stay on the sign-in screen), view=wizard|history|settings.
     fn apply_preview(&mut self) {
         let Ok(mode) = std::env::var("GSU_PREVIEW") else { return };
         self.elevated = true;
         let opts: Vec<&str> = mode.split(',').map(str::trim).collect();
         self.preview_confirm = opts.contains(&"confirm");
+        if opts.contains(&"login") {
+            self.auto_login_started = true;
+            self.login.user = "jnovak".into();
+            self.login.pass = "heslo1234".into();
+        }
         for o in &opts {
             match o.strip_prefix("view=") {
                 Some("wizard") => self.view = View::Wizard,
@@ -397,7 +411,7 @@ impl App {
             match ev {
                 Event::LoggedIn { user } => {
                     self.logged_in = true;
-                    self.user = user;
+                    self.user = if Self::preview("anon") { "jnovak".into() } else { user };
                     self.login.busy = false;
                     self.login.error = None;
                     self.login.pass.clear();
