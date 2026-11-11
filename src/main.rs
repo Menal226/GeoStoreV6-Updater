@@ -51,6 +51,16 @@ fn focus_existing() {
     }
 }
 
+fn show_error(text: &str) {
+    use windows::core::PCWSTR;
+    use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    let text = local::wide(text);
+    let title = local::wide(WINDOW_TITLE);
+    unsafe {
+        MessageBoxW(None, PCWSTR(text.as_ptr()), PCWSTR(title.as_ptr()), MB_OK | MB_ICONERROR);
+    }
+}
+
 fn main() -> eframe::Result<()> {
     let flag = |name: &str| std::env::args().any(|a| a.eq_ignore_ascii_case(name));
     let relaunch = flag("--relaunch");
@@ -81,17 +91,29 @@ fn main() -> eframe::Result<()> {
     };
 
     let icon = eframe::icon_data::from_png_bytes(app::ICON_PNG).unwrap_or_default();
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title(WINDOW_TITLE)
-            .with_inner_size([1060.0, 720.0])
-            .with_min_inner_size([960.0, 600.0])
-            .with_icon(icon),
-        ..Default::default()
+    let start = |renderer| {
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default()
+                .with_title(WINDOW_TITLE)
+                .with_inner_size([1060.0, 720.0])
+                .with_min_inner_size([960.0, 600.0])
+                .with_icon(icon.clone()),
+            renderer,
+            ..Default::default()
+        };
+        eframe::run_native(
+            WINDOW_TITLE,
+            options,
+            Box::new(move |cc| Ok(Box::new(app::App::new(cc, app::Launch { relaunch })))),
+        )
     };
-    eframe::run_native(
-        WINDOW_TITLE,
-        options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, app::Launch { relaunch })))),
-    )
+    // OpenGL needs far less memory, but without a graphics driver (e.g. a VM without 3D acceleration) only Direct3D 12 works, on Windows' software renderer.
+    let result = start(eframe::Renderer::Glow).or_else(|e| {
+        logfile::write(logfile::Level::Detail, &format!("OpenGL nelze použít ({e}), okno vykreslí Direct3D 12."));
+        start(eframe::Renderer::Wgpu)
+    });
+    if let Err(e) = &result {
+        show_error(&format!("Okno aplikace se nepodařilo otevřít.\n\n{e}"));
+    }
+    result
 }
