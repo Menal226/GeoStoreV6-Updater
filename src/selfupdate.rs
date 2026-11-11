@@ -111,7 +111,7 @@ fn update() -> Result<bool> {
     replace(&exe, &staged).map(|_| true)
 }
 
-/// A running exe cannot be overwritten but can be renamed, so the old one is moved aside and the new one takes its name.
+/// A running exe cannot be overwritten but can be renamed, so the old one is moved aside as a hidden file and the new one takes its name.
 fn replace(exe: &Path, staged: &Path) -> Result<()> {
     let version = local::file_version(staged).unwrap_or_default();
     if std::fs::copy(staged, exe).is_err() {
@@ -122,8 +122,18 @@ fn replace(exe: &Path, staged: &Path) -> Result<()> {
             let _ = std::fs::rename(&old, exe);
             return Err(e).context("Nelze zapsat novou verzi programu");
         }
+        hide(&old);
     }
     let _ = std::fs::remove_file(staged);
     logfile::write(Level::Info, &format!("Připravena nová verze aplikace {version}, použije se při příštím spuštění."));
     Ok(())
+}
+
+fn hide(path: &Path) {
+    use windows::Win32::Storage::FileSystem::{GetFileAttributesW, SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, FILE_FLAGS_AND_ATTRIBUTES};
+    let wide = local::wide_path(path);
+    unsafe {
+        let current = GetFileAttributesW(windows::core::PCWSTR(wide.as_ptr()));
+        let _ = SetFileAttributesW(windows::core::PCWSTR(wide.as_ptr()), FILE_FLAGS_AND_ATTRIBUTES(current) | FILE_ATTRIBUTE_HIDDEN);
+    }
 }
