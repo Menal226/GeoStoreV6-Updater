@@ -28,7 +28,7 @@ pub fn is_installed() -> bool {
 }
 
 pub fn install(hour: u32) -> Result<()> {
-    let exe = std::env::current_exe().context("Nelze zjistit cestu k programu")?;
+    let exe = crate::selfupdate::app_exe().context("Nelze zjistit cestu k programu")?;
     let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
         (Ok(d), Ok(u)) => format!("{d}\\{u}"),
         (_, Ok(u)) => u,

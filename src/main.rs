@@ -13,6 +13,7 @@ mod logic;
 mod paths;
 mod portal;
 mod scheduler;
+mod selfupdate;
 mod theme;
 mod views;
 mod widgets;
@@ -68,7 +69,9 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     };
 
+    let mut replaced = false;
     if background {
+        replaced = selfupdate::run();
         match logic::background_check() {
             Ok(0) => return Ok(()),
             Ok(n) => logfile::write(logfile::Level::Info, &format!("Automatická kontrola: nalezeno {n} aktualizací.")),
@@ -77,6 +80,10 @@ fn main() -> eframe::Result<()> {
                 return Ok(());
             }
         }
+    }
+
+    if !replaced {
+        selfupdate::spawn(!background);
     }
 
     let icon_size = 64u32;

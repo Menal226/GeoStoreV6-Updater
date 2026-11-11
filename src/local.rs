@@ -290,7 +290,7 @@ pub fn is_elevated() -> bool {
 pub fn relaunch_elevated() -> bool {
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-    let Ok(exe) = std::env::current_exe() else { return false };
+    let Some(exe) = crate::selfupdate::app_exe() else { return false };
     let exe = wide_path(&exe);
     let verb = wide("runas");
     let args = wide("--relaunch");
