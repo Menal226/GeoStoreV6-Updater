@@ -25,7 +25,7 @@ use std::os::windows::fs::OpenOptionsExt;
 
 const WINDOW_TITLE: &str = "GeoStore Updater";
 
-fn acquire_instance_lock() -> Option<File> {
+fn acquire_instance_lock() -> std::io::Result<File> {
     let path = paths::data_dir().join("instance.lock");
     OpenOptions::new()
         .create(true)
@@ -33,8 +33,9 @@ fn acquire_instance_lock() -> Option<File> {
         .write(true)
         .share_mode(0)
         .open(path)
-        .ok()
 }
+
+const ERROR_ACCESS_DENIED: i32 = 5;
 
 fn focus_existing() {
     use windows::core::PCWSTR;
@@ -60,15 +61,23 @@ fn main() -> eframe::Result<()> {
 
     let mut lock = acquire_instance_lock();
     for _ in 0..(if relaunch { 50 } else { 0 }) {
-        if lock.is_some() {
+        if lock.is_ok() {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
         lock = acquire_instance_lock();
     }
-    let Some(_lock) = lock else {
-        focus_existing();
-        return Ok(());
+    let _lock = match lock {
+        Ok(file) => file,
+        // Files an elevated run created in ProgramData are read-only for this unelevated one, so it asks for the same rights.
+        Err(e) if e.raw_os_error() == Some(ERROR_ACCESS_DENIED) && !local::is_elevated() && !relaunch => {
+            local::relaunch_elevated();
+            return Ok(());
+        }
+        Err(_) => {
+            focus_existing();
+            return Ok(());
+        }
     };
 
     let icon = eframe::icon_data::from_png_bytes(app::ICON_PNG).unwrap_or_default();
