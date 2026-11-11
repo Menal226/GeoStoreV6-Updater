@@ -881,6 +881,7 @@ impl App {
                     row.add_space(4.0);
                     row.add(egui::Label::new(RichText::new(&self.user).size(14.0).color(TEXT)).truncate());
                     row.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.add_space(14.0);
                         let resp = ui
                             .add_enabled(!busy, egui::Button::new(RichText::new("Odhlásit").size(13.0).color(MUTED)).frame(false))
                             .on_hover_cursor(egui::CursorIcon::PointingHand);
