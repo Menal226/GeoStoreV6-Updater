@@ -1,13 +1,14 @@
 use crate::app::{Action, App};
 use crate::fmt;
 use crate::installer;
-use crate::paths;
+use crate::{local, paths};
 use crate::theme::*;
 use crate::widgets::{self, icon, Btn};
 use eframe::egui::{self, Align, CornerRadius, Frame, Layout, Margin, RichText, Stroke};
 
 const INTERVALS: [u32; 6] = [1, 2, 4, 8, 12, 24];
 const VALUE_COL: f32 = 200.0;
+const REPO_URL: &str = "https://github.com/Menal226/GeoStoreV6-Updater";
 
 fn hours_label(h: u32) -> String {
     match h {
@@ -34,6 +35,19 @@ fn field_row(ui: &mut egui::Ui, name: &str, value: impl Into<egui::WidgetText>) 
         });
         ui.label(value);
     });
+}
+
+/// A setting (checkbox plus subtitle) with its buttons centred against the whole block on the right.
+fn option_row(ui: &mut egui::Ui, right_w: f32, left: impl FnOnce(&mut egui::Ui), right: impl FnOnce(&mut egui::Ui)) {
+    let full = ui.available_width();
+    let x0 = ui.cursor().min.x;
+    let block = ui
+        .allocate_ui_with_layout(egui::vec2(full - right_w - 16.0, 0.0), Layout::top_down(Align::Min), left)
+        .response
+        .rect;
+    let rect = egui::Rect::from_min_max(egui::pos2(x0 + full - right_w, block.top()), egui::pos2(x0 + full, block.bottom()));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(Layout::right_to_left(Align::Center)));
+    right(&mut child);
 }
 
 fn label(text: &str) -> RichText {
@@ -142,47 +156,54 @@ impl App {
             widgets::card(ui, |ui| {
                 widgets::card_title(ui, "Instalace");
                 ui.add_space(12.0);
-                changed |= widgets::checkbox(ui, &mut self.cfg.backup_konfig, widgets::path_job("Před přepsáním zálohovat upravené soubory v C:\\V6-KONFIG", 14.0, TEXT), true).changed();
-                widgets::indented(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        widgets::muted(ui, &format!("Zálohy se ukládají do {}", paths::BACKUP_ROOT));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if widgets::button(ui, Some(icon::FOLDER), "Otevřít složku", Btn::Secondary, true).clicked() {
-                                App::open(paths::BACKUP_ROOT);
-                            }
-                        });
-                    });
-                });
+                let folder_w = widgets::button_width(ui, Some(icon::FOLDER), "Otevřít složku");
+                option_row(
+                    ui,
+                    folder_w,
+                    |ui| {
+                        changed |= widgets::checkbox(ui, &mut self.cfg.backup_konfig, widgets::path_job("Před přepsáním zálohovat upravené soubory v C:\\V6-KONFIG", 14.0, TEXT), true).changed();
+                        widgets::indented(ui, |ui| widgets::muted(ui, &format!("Zálohy se ukládají do {}", paths::BACKUP_ROOT)));
+                    },
+                    |ui| {
+                        if widgets::button(ui, Some(icon::FOLDER), "Otevřít složku", Btn::Secondary, true).clicked() {
+                            App::open(paths::BACKUP_ROOT);
+                        }
+                    },
+                );
                 ui.add_space(8.0);
-                changed |= widgets::checkbox(ui, &mut self.cfg.keep_downloads, label("Ponechat stažené instalační balíčky"), true).changed();
                 let dl = paths::downloads_dir();
                 let size: u64 = installer::walk_files(&dl)
                     .iter()
                     .filter_map(|p| std::fs::metadata(p).ok())
                     .map(|m| m.len())
                     .sum();
-                widgets::indented(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(widgets::prose_path_job("", &dl.display().to_string(), &format!(" · {}", fmt::mb(size)), 13.0, MUTED)).wrap());
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if size > 0 && widgets::button(ui, Some(icon::DELETE), "Smazat", Btn::Secondary, !self.busy()).clicked() {
-                                for f in installer::walk_files(&dl) {
-                                    let _ = std::fs::remove_file(f);
-                                }
-                            }
-                            if widgets::button(ui, Some(icon::FOLDER), "Otevřít složku", Btn::Secondary, true).clicked() {
-                                App::open(&dl);
-                            }
+                let delete_w = if size > 0 { widgets::button_width(ui, Some(icon::DELETE), "Smazat") + ui.spacing().item_spacing.x } else { 0.0 };
+                let busy = self.busy();
+                option_row(
+                    ui,
+                    folder_w + delete_w,
+                    |ui| {
+                        changed |= widgets::checkbox(ui, &mut self.cfg.keep_downloads, label("Ponechat stažené instalační balíčky"), true).changed();
+                        widgets::indented(ui, |ui| {
+                            ui.add(egui::Label::new(widgets::prose_path_job("", &dl.display().to_string(), &format!(" · {}", fmt::mb(size)), 13.0, MUTED)).wrap());
                         });
-                    });
-                });
+                    },
+                    |ui| {
+                        if size > 0 && widgets::button(ui, Some(icon::DELETE), "Smazat", Btn::Secondary, !busy).clicked() {
+                            for f in installer::walk_files(&dl) {
+                                let _ = std::fs::remove_file(f);
+                            }
+                        }
+                        if widgets::button(ui, Some(icon::FOLDER), "Otevřít složku", Btn::Secondary, true).clicked() {
+                            App::open(&dl);
+                        }
+                    },
+                );
             });
             ui.add_space(12.0);
 
             widgets::card(ui, |ui| {
                 widgets::card_title(ui, "Sledované balíčky");
-                ui.add_space(4.0);
-                widgets::muted(ui, "Sledované balíčky se kontrolují a aktualizují. Každý balíček se vždy instaluje ze svého vlastního instalačního souboru.");
                 ui.add_space(12.0);
                 if self.rows.is_empty() {
                     widgets::muted(ui, "Seznam balíčků zatím nebyl načten");
@@ -243,7 +264,14 @@ impl App {
             widgets::card(ui, |ui| {
                 widgets::card_title(ui, "O aplikaci");
                 ui.add_space(12.0);
-                field_row(ui, "Verze", widgets::soft_mono_text(env!("CARGO_PKG_VERSION"), 13.0, MONO_INK));
+                ui.horizontal(|ui| {
+                    field_row(ui, "Verze", widgets::soft_mono_text(env!("CARGO_PKG_VERSION"), 13.0, MONO_INK));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if widgets::button(ui, Some(icon::LINK), "Otevřít na GitHubu", Btn::Secondary, true).clicked() {
+                            local::open_url(REPO_URL);
+                        }
+                    });
+                });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     field_row(ui, "Data aplikace", widgets::soft_mono_text(paths::data_dir().display().to_string(), 13.0, MONO_INK));

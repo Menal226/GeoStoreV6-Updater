@@ -25,6 +25,7 @@ pub mod icon {
     pub const HIDE: char = '\u{ED1A}';
     pub const PLAY: char = '\u{E768}';
     pub const DELETE: char = '\u{E74D}';
+    pub const LINK: char = '\u{E71B}';
 }
 
 pub fn icon_text(c: char, size: f32, color: Color32) -> RichText {
@@ -227,6 +228,36 @@ fn ink_metrics(galley: &egui::Galley) -> (f32, f32, f32) {
     (baseline, top, bottom)
 }
 
+/// Top and bottom of a single-glyph galley's visible ink, relative to the galley top.
+/// Read from the rasterised glyph because icon fonts report loose outline bounds.
+fn icon_ink(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
+    static CACHE: std::sync::Mutex<Vec<([u16; 2], [u16; 2], f32, f32)>> = std::sync::Mutex::new(Vec::new());
+    let Some(g) = galley.rows.first().and_then(|r| r.glyphs.first()) else {
+        return (0.0, galley.size().y);
+    };
+    let uv = g.uv_rect;
+    let top = g.pos.y + uv.offset.y;
+    let rows = uv.max[1].saturating_sub(uv.min[1]);
+    if rows == 0 {
+        return (top, top + uv.size.y);
+    }
+    let scale = uv.size.y / rows as f32;
+    let cached = CACHE.lock().ok().and_then(|c| c.iter().find(|e| e.0 == uv.min && e.1 == uv.max).map(|e| (e.2, e.3)));
+    let (first, last) = cached.unwrap_or_else(|| {
+        let image = ui.fonts(|f| f.image());
+        let width = image.size[0];
+        let inked = |y: u16| (uv.min[0]..uv.max[0]).any(|x| image.pixels.get(y as usize * width + x as usize).is_some_and(|&c| c > 0.25));
+        let first = (uv.min[1]..uv.max[1]).find(|&y| inked(y)).unwrap_or(uv.min[1]);
+        let last = (uv.min[1]..uv.max[1]).rev().find(|&y| inked(y)).unwrap_or(uv.max[1] - 1);
+        let span = ((first - uv.min[1]) as f32, (last + 1 - uv.min[1]) as f32);
+        if let Ok(mut c) = CACHE.lock() {
+            c.push((uv.min, uv.max, span.0, span.1));
+        }
+        span
+    });
+    (top + first * scale, top + last * scale)
+}
+
 /// Grey box of "name   from → to" rows, padded by the letters' ink so the top and bottom margins match.
 pub fn change_list(ui: &mut Ui, lines: &[(String, String)]) {
     const PAD_X: f32 = 12.0;
@@ -331,33 +362,21 @@ pub fn button_ex(ui: &mut Ui, ic: Option<char>, text: &str, kind: Btn, enabled: 
         fg.gamma_multiply(0.45)
     };
 
-    let mut job = LayoutJob::default();
-    let text_format = TextFormat {
-        font_id: FontId::new(14.0, FontFamily::Proportional),
-        color: fg,
-        valign: Align::Center,
-        ..Default::default()
-    };
-    if let Some(c) = ic {
-        job.append(
-            &c.to_string(),
-            0.0,
-            TextFormat {
-                font_id: FontId::new(14.0, theme::icons()),
-                color: if kind == Btn::Secondary && enabled { MUTED } else { fg },
-                valign: Align::Center,
-                ..Default::default()
-            },
-        );
-        if !text.is_empty() {
-            job.append(text, 8.0, text_format);
-        }
-    } else {
-        job.append(text, 0.0, text_format);
-    }
-    let galley = ui.fonts(|f| f.layout_job(job));
+    let text_font = FontId::new(14.0, FontFamily::Proportional);
+    let icon_color = if kind == Btn::Secondary && enabled { MUTED } else { fg };
+    let (text_galley, cap_galley, icon_galley) = ui.fonts(|f| {
+        (
+            f.layout_no_wrap(text.to_string(), text_font.clone(), fg),
+            f.layout_no_wrap("H".to_string(), text_font.clone(), fg),
+            ic.map(|c| f.layout_no_wrap(c.to_string(), FontId::new(14.0, theme::icons()), icon_color)),
+        )
+    });
+    let gap = if icon_galley.is_some() && !text.is_empty() { 8.0 } else { 0.0 };
+    let icon_w = icon_galley.as_ref().map_or(0.0, |g| g.size().x);
+    let text_w = if text.is_empty() { 0.0 } else { text_galley.size().x };
+    let content_w = icon_w + gap + text_w;
     let padding = if text.is_empty() { 8.0 } else { 16.0 };
-    let size = egui::vec2((galley.size().x + padding * 2.0).max(min_width).max(height), height);
+    let size = egui::vec2((content_w + padding * 2.0).max(min_width).max(height), height);
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(size, sense);
     if ui.is_rect_visible(rect) {
@@ -376,8 +395,19 @@ pub fn button_ex(ui: &mut Ui, ic: Option<char>, text: &str, kind: Btn, enabled: 
         if response.has_focus() {
             painter.rect_stroke(rect.expand(2.0), CornerRadius::same(10), Stroke::new(1.5_f32, ACCENT), StrokeKind::Outside);
         }
-        let pos = rect.center() - galley.size() / 2.0;
-        painter.galley(pos, galley, fg);
+        // Text and icon are centred on the capital-letter height, so diacritics and the icon font's own metrics don't shift them.
+        let (baseline, cap_top, _) = ink_metrics(&cap_galley);
+        let mid = rect.center().y;
+        let left = rect.center().x - content_w / 2.0;
+        if let Some(g) = icon_galley {
+            let (itop, ibottom) = icon_ink(ui, &g);
+            let y = mid - (itop + ibottom) / 2.0;
+            painter.galley(egui::pos2(left, y), g, icon_color);
+        }
+        if !text.is_empty() {
+            let y = mid - (baseline + cap_top / 2.0);
+            painter.galley(egui::pos2(left + icon_w + gap, y), text_galley, fg);
+        }
     }
     if enabled {
         response.on_hover_cursor(CursorIcon::PointingHand)

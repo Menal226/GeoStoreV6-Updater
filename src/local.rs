@@ -323,6 +323,11 @@ pub fn open_in_explorer(path: &Path) {
     let _ = std::process::Command::new("explorer.exe").arg(path).spawn();
 }
 
+/// Going through explorer.exe keeps the browser out of this process's elevated token.
+pub fn open_url(url: &str) {
+    let _ = std::process::Command::new("explorer.exe").arg(url).spawn();
+}
+
 /// Light caption matching the sidebar, so the native title bar does not follow a dark system theme.
 pub fn style_title_bar(title: &str) -> bool {
     use windows::Win32::Foundation::COLORREF;
