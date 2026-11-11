@@ -47,7 +47,7 @@ fn normalize(level: Level, text: &str) -> (Level, String) {
 
 impl App {
     pub(crate) fn ui_history(&mut self, ui: &mut egui::Ui) {
-        widgets::page_header(ui, "Historie", "Záznam kontrol a instalací provedených touto aplikací", None, |ui| {
+        widgets::page_header(ui, "Historie", "", None, |ui| {
             widgets::menu_button(ui, "history_menu", Some(icon::LOG), "Protokoly", |ui| {
                 if widgets::menu_item(ui, Some(icon::LOG), "Celý protokol aplikace", true).clicked() {
                     App::open(logfile::path());

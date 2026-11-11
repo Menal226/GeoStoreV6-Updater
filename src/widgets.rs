@@ -729,17 +729,6 @@ pub fn numbers_job(text: &str, size: f32, color: Color32) -> LayoutJob {
 }
 
 /// Prose followed by a path that may contain spaces, e.g. "Data aplikace: " + "C:\ProgramData\GeoStore Updater".
-pub fn prose_path_job(prose: &str, path: &str, after: &str, size: f32, color: Color32) -> LayoutJob {
-    let prop = TextFormat { font_id: FontId::new(size, FontFamily::Proportional), color, ..Default::default() };
-    let mut job = LayoutJob::default();
-    job.append(prose, 0.0, prop.clone());
-    job.append(path, 0.0, inline_mono(size, color));
-    if !after.is_empty() {
-        job.append(after, 0.0, prop);
-    }
-    job
-}
-
 /// Text where file names and paths are set in the secondary mono face.
 pub fn path_job(text: &str, size: f32, color: Color32) -> LayoutJob {
     let prop = TextFormat { font_id: FontId::new(size, FontFamily::Proportional), color, ..Default::default() };

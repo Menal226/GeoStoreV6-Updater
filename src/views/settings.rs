@@ -38,7 +38,15 @@ fn field_row(ui: &mut egui::Ui, name: &str, value: impl Into<egui::WidgetText>) 
 }
 
 /// A setting (checkbox plus subtitle) with its buttons centred against the whole block on the right.
-fn option_row(ui: &mut egui::Ui, right_w: f32, left: impl FnOnce(&mut egui::Ui), right: impl FnOnce(&mut egui::Ui)) {
+fn option_row(ui: &mut egui::Ui, right_w: f32, single_line: bool, left: impl FnOnce(&mut egui::Ui), right: impl FnOnce(&mut egui::Ui)) {
+    if single_line {
+        ui.horizontal(|ui| {
+            ui.set_min_height(32.0);
+            left(ui);
+            ui.with_layout(Layout::right_to_left(Align::Center), right);
+        });
+        return;
+    }
     let full = ui.available_width();
     let x0 = ui.cursor().min.x;
     let block = ui
@@ -56,7 +64,7 @@ fn label(text: &str) -> RichText {
 
 impl App {
     pub(crate) fn ui_settings(&mut self, ui: &mut egui::Ui) {
-        widgets::page_header(ui, "Nastavení", "Změny se ukládají okamžitě", None, |_| {});
+        widgets::page_header(ui, "Nastavení", "", None, |_| {});
         let mut changed = false;
         let mut task_changed = false;
 
@@ -86,10 +94,7 @@ impl App {
                 });
                 ui.add_space(8.0);
                 changed |= widgets::checkbox(ui, &mut self.cfg.auto_install, label("Nalezené aktualizace instalovat automaticky"), true).changed();
-                widgets::indented(ui, |ui| {
-                    widgets::muted(ui, "Instalace se spustí 15 sekund po nalezení aktualizace a lze ji ještě zrušit. Pokud je GeoStore V6 spuštěn, počká se na jeho ukončení.");
-                });
-                ui.add_space(8.0);
+                ui.add_space(12.0);
                 if widgets::checkbox(ui, &mut self.cfg.run_at_logon, label("Kontrolovat při přihlášení do Windows a jednou denně"), true).changed() {
                     task_changed = true;
                 }
@@ -115,10 +120,7 @@ impl App {
                     });
                     if self.task_installed {
                         widgets::mark_label(ui, widgets::Mark::Success, "Naplánovaná úloha „GeoStore Updater“ je aktivní", 13.0);
-                        if let Ok(exe) = std::env::current_exe() {
-                            ui.label(widgets::soft_mono_text(exe.display().to_string(), 12.5, SUBTLE));
-                            widgets::muted(ui, "Program po zapnutí úlohy nepřesouvejte");
-                        }
+                        widgets::muted(ui, "Program po zapnutí úlohy nepřesouvejte");
                     }
                     if let Some(err) = &self.task_error {
                         ui.label(RichText::new(err).size(13.0).color(DANGER));
@@ -155,14 +157,14 @@ impl App {
 
             widgets::card(ui, |ui| {
                 widgets::card_title(ui, "Instalace");
-                ui.add_space(12.0);
+                ui.add_space(6.0);
                 let folder_w = widgets::button_width(ui, Some(icon::FOLDER), "Otevřít složku");
                 option_row(
                     ui,
                     folder_w,
+                    true,
                     |ui| {
                         changed |= widgets::checkbox(ui, &mut self.cfg.backup_konfig, widgets::path_job("Před přepsáním zálohovat upravené soubory v C:\\V6-KONFIG", 14.0, TEXT), true).changed();
-                        widgets::indented(ui, |ui| widgets::muted(ui, &format!("Zálohy se ukládají do {}", paths::BACKUP_ROOT)));
                     },
                     |ui| {
                         if widgets::button(ui, Some(icon::FOLDER), "Otevřít složku", Btn::Secondary, true).clicked() {
@@ -182,11 +184,12 @@ impl App {
                 option_row(
                     ui,
                     folder_w + delete_w,
+                    size == 0,
                     |ui| {
                         changed |= widgets::checkbox(ui, &mut self.cfg.keep_downloads, label("Ponechat stažené instalační balíčky"), true).changed();
-                        widgets::indented(ui, |ui| {
-                            ui.add(egui::Label::new(widgets::prose_path_job("", &dl.display().to_string(), &format!(" · {}", fmt::mb(size)), 13.0, MUTED)).wrap());
-                        });
+                        if size > 0 {
+                            widgets::indented(ui, |ui| widgets::muted(ui, &format!("Stažené balíčky zabírají {}", fmt::mb(size))));
+                        }
                     },
                     |ui| {
                         if size > 0 && widgets::button(ui, Some(icon::DELETE), "Smazat", Btn::Secondary, !busy).clicked() {

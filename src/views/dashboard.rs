@@ -220,11 +220,7 @@ impl App {
                 self.ui_next_check(ui);
 
                 if !others.is_empty() {
-                    widgets::section_title(
-                        ui,
-                        "Další balíčky dostupné pro váš účet",
-                        "Nejsou sledovány. Sledování zapnete v nabídce u balíčku nebo v Nastavení",
-                    );
+                    widgets::section_title(ui, "Další balíčky dostupné pro váš účet", "");
                     self.ui_package_list(ui, &others, false, &cols);
                 }
                 ui.add_space(16.0);

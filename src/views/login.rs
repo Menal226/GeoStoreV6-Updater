@@ -71,10 +71,6 @@ impl App {
         let enter = (user.lost_focus() || pass.lost_focus()) && ui.input(|i| i.key_pressed(Key::Enter));
         ui.add_space(20.0);
         widgets::checkbox(ui, &mut self.login.remember, RichText::new("Zapamatovat přihlášení").size(14.0), !busy);
-        ui.add_space(4.0);
-        widgets::indented(ui, |ui| {
-            ui.label(RichText::new("Nutné pro automatickou kontrolu a instalaci aktualizací").size(12.5).color(SUBTLE));
-        });
 
         if let Some(err) = self.login.error.clone() {
             ui.add_space(12.0);

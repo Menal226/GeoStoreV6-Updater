@@ -696,7 +696,7 @@ impl App {
     fn geostore_warning(&self) -> Option<(&'static str, &'static str)> {
         self.geostore_running.then_some((
             "GeoStore V6 je spuštěn",
-            "Uložte práci a zavřete jej. Instalace na jeho ukončení počká. Upravené konfigurační soubory se před přepsáním zálohují.",
+            "Uložte práci a zavřete jej. Instalace na jeho ukončení počká.",
         ))
     }
 
@@ -718,17 +718,17 @@ impl App {
                 } else {
                     format!("Aktualizovat {} {}?", keys.len(), fmt::packages(keys.len()))
                 };
-                (title, "Z portálu se stáhnou a nainstalují nové verze:".into(), "Aktualizovat", self.geostore_warning())
+                (title, String::new(), "Aktualizovat", self.geostore_warning())
             }
             Confirm::Reinstall(key) => (
                 format!("Přeinstalovat {}?", self.names(std::slice::from_ref(key))),
-                "Balíček se znovu stáhne z portálu a nainstaluje, i když je nainstalovaná verze aktuální.".into(),
+                String::new(),
                 "Přeinstalovat",
                 self.geostore_warning(),
             ),
             Confirm::InstallModule(key) => (
                 format!("Nainstalovat {}?", self.names(std::slice::from_ref(key))),
-                "Použije se kompletní instalační balíček včetně výchozího nastavení prostředí a zástupců na ploše.".into(),
+                String::new(),
                 "Nainstalovat",
                 Some(("Přepíše se nastavení prostředí", "Kompletní instalace přepíše nastavení v profilu uživatele (%LOCALAPPDATA%\\GEOVAP\\GSV6).")),
             ),
@@ -746,7 +746,7 @@ impl App {
                 }
                 (
                     "Spustit novou instalaci?".into(),
-                    "Nainstaluje se:".into(),
+                    String::new(),
                     "Spustit instalaci",
                     Some(("Přepíšou se konfigurační soubory", "Kompletní instalace přepíše soubory v C:\\V6-KONFIG a nastavení prostředí v profilu uživatele. Upravené konfigurační soubory se zálohují.")),
                 )
@@ -771,18 +771,16 @@ impl App {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.label(RichText::new(&title).size(20.0).color(TEXT));
             ui.add_space(16.0);
-            ui.add(egui::Label::new(RichText::new(&body).size(14.0).color(MUTED)).wrap());
-            if !lines.is_empty() {
-                ui.add_space(8.0);
-                widgets::change_list(ui, &lines);
+            if !body.is_empty() {
+                ui.add(egui::Label::new(RichText::new(&body).size(14.0).color(MUTED)).wrap());
+                ui.add_space(if lines.is_empty() { 16.0 } else { 8.0 });
             }
-            ui.add_space(16.0);
+            if !lines.is_empty() {
+                widgets::change_list(ui, &lines);
+                ui.add_space(16.0);
+            }
             match warn {
                 Some((head, text)) => widgets::banner(ui, widgets::Tone::Warn, head, text, 0.0, |_| {}),
-                None if matches!(c, Confirm::UpdateAll(_) | Confirm::Reinstall(_)) && self.cfg.backup_konfig => {
-                    widgets::muted(ui, "Konfigurační soubory, které jste v C:\\V6-KONFIG upravili, se před přepsáním zálohují.");
-                    ui.add_space(16.0);
-                }
                 None => {}
             }
             ui.add_space(8.0);

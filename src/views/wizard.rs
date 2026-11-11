@@ -2,7 +2,7 @@ use crate::app::{Action, App, Confirm, Licences};
 use crate::fmt;
 use crate::logic::{PackageRow, Status};
 use crate::theme::*;
-use crate::widgets::{self, icon, Btn, Tone};
+use crate::widgets::{self, icon, Btn};
 use crate::worker::{CleanPlan, Cmd};
 use eframe::egui::{self, Align, Frame, Layout, Margin, RichText, Stroke};
 
@@ -140,7 +140,7 @@ impl App {
         widgets::page_header(
             ui,
             "Nová instalace",
-            "Instalace grafického editoru a vybraných aplikačních řešení na tento počítač",
+            "",
             None,
             |_| {},
         );
@@ -226,22 +226,12 @@ impl App {
             ui.add_space(12.0);
             match &editor_row {
                 Some(row) if row.latest.is_some() => {
-                    let f = row.latest.as_ref().unwrap();
                     App::wizard_item(ui, &mut self.wizard.editor, enabled, "GeoStore V6", row);
-                    widgets::indented(ui, |ui| {
-                        ui.label(RichText::new("Základní grafický editor").size(13.0).color(MUTED));
-                        ui.label(widgets::soft_mono_text(format!("{} · {}", f.title, fmt::date(f.date)), 12.5, SECONDARY_INK));
-                        if row.detected {
-                            ui.add_space(4.0);
-                            widgets::muted(
-                                ui,
-                                &format!(
-                                    "Nainstalována verze {}. Pokud editor vyberete, bude odinstalován a nainstalován znovu.",
-                                    row.local_version.clone().unwrap_or_default()
-                                ),
-                            );
-                        }
-                    });
+                    if row.detected {
+                        widgets::indented(ui, |ui| {
+                            widgets::muted(ui, "Při výběru se editor odinstaluje a nainstaluje znovu.");
+                        });
+                    }
                 }
                 _ => widgets::muted(ui, "Instalační balíček editoru nebyl na portálu nalezen"),
             }
@@ -263,18 +253,16 @@ impl App {
                     }
                 });
             });
-            ui.add_space(4.0);
-            widgets::muted(ui, "Použijí se kompletní instalační balíčky včetně výchozího nastavení prostředí a zástupců na ploše.");
             ui.add_space(12.0);
             let count = modules.len();
             for (i, row) in modules.iter().enumerate() {
-                let file = row.complete.clone().or_else(|| row.latest.clone());
-                let Some(file) = file else { continue };
+                if row.complete.is_none() && row.latest.is_none() {
+                    continue;
+                }
                 let checked = self.wizard.modules.entry(row.key.clone()).or_insert(false);
                 App::wizard_item(ui, checked, enabled, &row.info.name, row);
                 widgets::indented(ui, |ui| {
                     ui.label(RichText::new(&row.info.description).size(13.0).color(MUTED));
-                    ui.add(egui::Label::new(widgets::soft_mono_text(format!("{} · {}", file.title, fmt::date(file.date)), 12.5, SECONDARY_INK)).truncate());
                 });
                 if i + 1 < count {
                     ui.add_space(8.0);
@@ -292,55 +280,34 @@ impl App {
                 RichText::new("Nainstalovat ovladač hardwarového klíče (Sentinel HASP)").size(14.0),
                 enabled,
             );
-            widgets::indented(ui, |ui| {
-                widgets::muted(ui, "Spustí se průvodce instalací ovladače z instalačního balíčku. Bez ovladače nelze GeoStore V6 s HW klíčem spustit.");
-            });
-            ui.add_space(8.0);
+            ui.add_space(12.0);
             let vc_enabled = enabled && self.wizard.editor;
-            widgets::checkbox(
+            let vc = widgets::checkbox(
                 ui,
                 &mut self.wizard.vcredist,
                 RichText::new("Doinstalovat Microsoft Visual C++ 2010 a 2012 (x64)").size(14.0),
                 vc_enabled,
             );
-            widgets::indented(ui, |ui| {
-                let text = if self.wizard.editor {
-                    "Knihovny potřebné pro spuštění GeoStore V6 a práci s rastry. Instalují se tiše z adresáře Redist editoru."
-                } else {
-                    "Dostupné jen při instalaci editoru. Knihovny se instalují z jeho adresáře Redist."
-                };
-                ui.add(egui::Label::new(widgets::path_job(text, 13.0, if vc_enabled { MUTED } else { DISABLED_TEXT })).wrap());
-            });
-            ui.add_space(8.0);
+            if !self.wizard.editor {
+                vc.on_hover_text("Dostupné jen při instalaci editoru");
+            }
+            ui.add_space(12.0);
             let lic_enabled = enabled && self.licence_possible() && !self.no_licences();
             let mut lic_on = self.wizard.licence && !self.no_licences();
-            if widgets::checkbox(ui, &mut lic_on, RichText::new("Stáhnout plovoucí licenci (gsfl.lic)").size(14.0), lic_enabled).changed() {
+            let lic = widgets::checkbox(ui, &mut lic_on, RichText::new("Stáhnout plovoucí licenci (gsfl.lic)").size(14.0), lic_enabled);
+            if lic.changed() {
                 self.wizard.licence = lic_on;
             }
-            widgets::indented(ui, |ui| {
-                let text = if self.licence_possible() {
-                    "Při použití HW klíče není potřeba."
-                } else {
-                    "Dostupné jen s nainstalovaným nebo vybraným editorem, licence se ukládá do jeho adresáře."
-                };
-                ui.add(egui::Label::new(widgets::path_job(text, 13.0, if lic_enabled { MUTED } else { DISABLED_TEXT })).wrap());
-                if self.licence_possible() {
-                    ui.add_space(12.0);
+            if !self.licence_possible() {
+                lic.on_hover_text("Dostupné jen s nainstalovaným nebo vybraným editorem");
+            } else {
+                widgets::indented(ui, |ui| {
+                    ui.add_space(8.0);
                     let choice_enabled = lic_enabled && self.wizard.licence;
                     self.ui_licence_choice(ui, choice_enabled);
-                }
-            });
+                });
+            }
         });
-        ui.add_space(12.0);
-
-        widgets::banner(
-            ui,
-            Tone::Warn,
-            "Co kompletní instalace přepíše",
-            "Konfigurační soubory v C:\\V6-KONFIG, nastavení prostředí v %LOCALAPPDATA%\\GEOVAP\\GSV6 a zástupce na ploše. Konfigurační soubory, které se liší od dodávaných, se před přepsáním zálohují do C:\\V6-KONFIG_zalohy.",
-            0.0,
-            |_| {},
-        );
         ui.add_space(8.0);
     }
 }
