@@ -33,7 +33,7 @@ struct RowCells {
     name: RichText,
     description: RichText,
     installed: RichText,
-    version: egui::text::LayoutJob,
+    version: Option<egui::text::LayoutJob>,
     installed_tip: &'static str,
     portal: RichText,
     state: StateCell,
@@ -109,11 +109,17 @@ impl App {
             return ("Zatím neproběhla žádná kontrola".into(), Mark::Empty);
         };
         let when = format!("poslední kontrola {}", fmt::datetime(t));
-        if pending > 0 {
+        if self.editor_missing() {
+            (format!("GeoStore V6 není nainstalován · {when}"), Mark::Pending)
+        } else if pending > 0 {
             (format!("K dispozici {pending} {} · {when}", updates_word(pending)), Mark::Error)
         } else {
             (format!("Vše aktuální · {when}"), Mark::Success)
         }
+    }
+
+    fn editor_missing(&self) -> bool {
+        self.rows.iter().any(|r| r.is_editor() && !r.detected)
     }
 
     fn row_state(&self, row: &PackageRow) -> Option<RowState> {
@@ -150,7 +156,11 @@ impl App {
         let can_install = self.can_install();
         let checking = self.checking;
         let busy = self.busy();
+        let editor_missing = self.editor_missing();
         widgets::page_header(ui, "Přehled", &subtitle, Some(mark), |ui| {
+            if editor_missing && !busy && widgets::button(ui, Some(icon::PACKAGE), "Nová instalace", Btn::Primary, true).clicked() {
+                self.actions.push(Action::Navigate(crate::app::View::Wizard));
+            }
             if !pending.is_empty()
                 && !busy
                 && widgets::button(ui, Some(icon::DOWNLOAD), &format!("Aktualizovat vše ({})", pending.len()), Btn::Primary, can_install).clicked()
@@ -270,9 +280,9 @@ impl App {
             None => widgets::mono_text("—", 13.0, SUBTLE),
         };
         let version = match (&version, row.detected || finished) {
-            (Some(v), _) => widgets::numbers_job(&format!("verze {v}"), 12.5, SECONDARY_INK),
-            (None, true) => widgets::numbers_job("verze neznámá", 12.5, SECONDARY_INK),
-            (None, false) => widgets::numbers_job("nenainstalováno", 12.5, SECONDARY_INK),
+            (Some(v), _) => Some(widgets::numbers_job(&format!("verze {v}"), 12.5, SECONDARY_INK)),
+            (None, true) => Some(widgets::numbers_job("verze neznámá", 12.5, SECONDARY_INK)),
+            (None, false) => None,
         };
         let newer = row.status == Status::UpdateAvailable && !finished;
         let portal_date = row.latest.as_ref().map(|f| fmt::date(f.date)).unwrap_or_else(|| "—".into());
@@ -315,7 +325,10 @@ impl App {
         for row in &self.rows {
             let cells = self.row_cells(row, self.cfg.is_tracked(&row.key, row.detected));
             c.name = c.name.max(text_width(ui, cells.name)).max(text_width(ui, cells.description));
-            c.installed = c.installed.max(text_width(ui, cells.installed)).max(text_width(ui, cells.version));
+            c.installed = c.installed.max(text_width(ui, cells.installed));
+            if let Some(v) = cells.version {
+                c.installed = c.installed.max(text_width(ui, v));
+            }
             c.portal = c.portal.max(text_width(ui, cells.portal));
             let state = match &cells.state {
                 StateCell::Busy(label) => widgets::MARK_SLOT + text_width(ui, RichText::new(label).size(13.0)),
@@ -376,6 +389,7 @@ impl App {
         let can_install = self.can_install();
         let op_running = self.op.is_some();
         let cells = self.row_cells(row, tracked);
+        let editor_missing = self.editor_missing();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             widgets::module_tile(ui, &row.info.initials, !tracked, TILE);
@@ -385,7 +399,7 @@ impl App {
                 name.on_hover_text(format!("{}\n{}", row.info.description, f.title));
             }
             ui.add_space(gap);
-            let installed = cell(ui, cols.installed, cells.installed, Some(cells.version.into()));
+            let installed = cell(ui, cols.installed, cells.installed, cells.version.map(Into::into));
             if !cells.installed_tip.is_empty() {
                 installed.on_hover_text(cells.installed_tip);
             }
@@ -409,6 +423,16 @@ impl App {
                             self.actions.push(Action::Install(vec![row.key.clone()], false));
                         }
                     }
+                    StateCell::Install if editor_missing => {
+                        let resp = widgets::button(ui, INSTALL_LABEL.0, INSTALL_LABEL.1, Btn::Secondary, true)
+                            .on_hover_text("Balíček vyžaduje GeoStore V6. Otevře se Nová instalace s předvybraným editorem a tímto balíčkem.");
+                        if resp.clicked() {
+                            self.sync_wizard();
+                            self.wizard.editor = true;
+                            self.wizard.modules.insert(row.key.clone(), true);
+                            self.actions.push(Action::Navigate(crate::app::View::Wizard));
+                        }
+                    }
                     StateCell::Install => {
                         if widgets::button(ui, INSTALL_LABEL.0, INSTALL_LABEL.1, Btn::Secondary, can_install).clicked() {
                             self.actions.push(Action::Ask(Confirm::InstallModule(row.key.clone())));
@@ -422,13 +446,9 @@ impl App {
                     return;
                 }
                 let key = row.key.clone();
-                let elevated = self.elevated;
                 widgets::more_menu(ui, ("row_menu", &key), |ui| {
                     if row.detected && row.latest.is_some() {
-                        let item = widgets::menu_item(ui, Some(icon::REFRESH), "Přeinstalovat", can_install);
-                        if !elevated {
-                            item.on_hover_text("Instalace vyžaduje spuštění aplikace s právy správce");
-                        } else if item.clicked() {
+                        if widgets::menu_item(ui, Some(icon::REFRESH), "Přeinstalovat", can_install).clicked() {
                             self.actions.push(Action::Ask(Confirm::Reinstall(key.clone())));
                         }
                     }

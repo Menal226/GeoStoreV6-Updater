@@ -96,6 +96,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         WINDOW_TITLE,
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, app::Launch { background })))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, app::Launch { background, relaunch })))),
     )
 }

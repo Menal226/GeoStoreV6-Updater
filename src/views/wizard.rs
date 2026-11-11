@@ -6,8 +6,11 @@ use crate::widgets::{self, icon, Btn, Tone};
 use crate::worker::CleanPlan;
 use eframe::egui::{self, Align, Frame, Layout, Margin, RichText, Stroke};
 
+/// The bar sits on the panel's 20px bottom margin; this top inset gives the button equal space above and below.
+const BAR_TOP: f32 = 26.0;
+
 impl App {
-    fn sync_wizard(&mut self) {
+    pub(crate) fn sync_wizard(&mut self) {
         if self.wizard.initialized || self.rows.is_empty() {
             return;
         }
@@ -68,10 +71,11 @@ impl App {
             let can_install = self.can_install();
             let bar = egui::TopBottomPanel::bottom("wizard_bar")
                 .show_separator_line(false)
-                .frame(Frame::new().fill(BG).inner_margin(Margin { left: 0, right: widgets::RIGHT_GUTTER as i8, top: 0, bottom: 0 }))
+                .frame(Frame::new().fill(BG).inner_margin(Margin { left: 0, right: widgets::RIGHT_GUTTER as i8, top: BAR_TOP as i8, bottom: 0 }))
                 .exact_height(64.0)
                 .show_inside(ui, |ui| {
-                    ui.horizontal_centered(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.set_min_height(32.0);
                         let summary = if plan.is_empty() {
                             "Vyberte alespoň jednu položku".to_string()
                         } else {

@@ -24,7 +24,7 @@ pub struct InstallOptions {
     pub force: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CleanPlan {
     pub editor: bool,
     pub modules: Vec<String>,

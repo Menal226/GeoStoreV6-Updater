@@ -6,7 +6,7 @@ use crate::logic::{self, PackageRow, Status};
 use crate::theme::{self, *};
 use crate::widgets::{self, icon, Btn};
 use crate::worker::{self, CleanPlan, Cmd, Event, InstallOptions, Progress};
-use crate::{creds, local, scheduler};
+use crate::{creds, local, paths, scheduler};
 use chrono::{DateTime, Local};
 use eframe::egui::{self, Align, CornerRadius, Frame, Layout, Margin, RichText};
 use std::collections::BTreeMap;
@@ -22,6 +22,7 @@ const MAX_LOG_LINES: usize = 6000;
 #[derive(Default, Clone, Copy)]
 pub struct Launch {
     pub background: bool,
+    pub relaunch: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -67,6 +68,39 @@ pub enum Confirm {
     CancelOp,
 }
 
+/// Install request carried across the UAC restart, so the elevated copy picks up where the user left off.
+#[derive(serde::Serialize, serde::Deserialize)]
+enum Resume {
+    UpdateAll(Vec<String>),
+    Install(Vec<String>),
+    Reinstall(String),
+    InstallModule(String),
+    CleanInstall(CleanPlan),
+    ApplyTask,
+}
+
+impl Resume {
+    fn path() -> PathBuf {
+        paths::data_dir().join("resume.json")
+    }
+
+    fn take(relaunched: bool) -> Option<Self> {
+        let path = Self::path();
+        let text = std::fs::read_to_string(&path).ok();
+        let _ = std::fs::remove_file(&path);
+        if !relaunched {
+            return None;
+        }
+        serde_json::from_str(&text?).ok()
+    }
+
+    fn save(&self) {
+        if let Ok(json) = serde_json::to_string(self) {
+            let _ = std::fs::write(Self::path(), json);
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct WizardState {
     pub initialized: bool,
@@ -92,7 +126,6 @@ pub enum Action {
     ForgetCreds,
     SaveCreds,
     ApplyTask,
-    RelaunchElevated,
 }
 
 pub struct App {
@@ -129,6 +162,7 @@ pub struct App {
     preview_confirm: bool,
     title_styled: bool,
     close_requested: bool,
+    resume: Option<Resume>,
     last_auto_check: Instant,
     pub save_creds: Option<String>,
 }
@@ -192,6 +226,7 @@ impl App {
             preview_confirm: false,
             title_styled: false,
             close_requested: false,
+            resume: Resume::take(launch.relaunch),
             last_auto_check: Instant::now(),
             save_creds: None,
             cfg,
@@ -262,7 +297,82 @@ impl App {
     }
 
     pub fn can_install(&self) -> bool {
-        self.op.is_none() && self.elevated
+        self.op.is_none()
+    }
+
+    fn admin_request(action: &Action) -> Option<Resume> {
+        match action {
+            Action::Ask(Confirm::UpdateAll(k)) => Some(Resume::UpdateAll(k.clone())),
+            Action::Ask(Confirm::Reinstall(k)) => Some(Resume::Reinstall(k.clone())),
+            Action::Ask(Confirm::InstallModule(k)) => Some(Resume::InstallModule(k.clone())),
+            Action::Ask(Confirm::CleanInstall(p)) => Some(Resume::CleanInstall(p.clone())),
+            Action::Install(k, _) => Some(Resume::Install(k.clone())),
+            Action::CleanInstall(p) => Some(Resume::CleanInstall(p.clone())),
+            Action::ApplyTask => Some(Resume::ApplyTask),
+            _ => None,
+        }
+    }
+
+    /// Restarts through the UAC prompt and hands the request to the elevated copy.
+    fn elevate_for(&mut self, resume: Resume) {
+        let task = matches!(resume, Resume::ApplyTask);
+        self.cfg.save();
+        resume.save();
+        if local::relaunch_elevated() {
+            self.close_requested = true;
+            return;
+        }
+        let _ = std::fs::remove_file(Resume::path());
+        if task {
+            self.task_error = Some("Naplánovaná úloha vyžaduje práva správce, oprávnění nebylo uděleno.".into());
+        } else {
+            self.result = Some((false, "Instalace vyžaduje práva správce, oprávnění nebylo uděleno.".into()));
+        }
+    }
+
+    fn resume_pending(&mut self) {
+        if !self.logged_in || self.rows.is_empty() || self.checking || self.op.is_some() || self.confirm.is_some() {
+            return;
+        }
+        let Some(resume) = self.resume.take() else { return };
+        match resume {
+            Resume::UpdateAll(keys) => {
+                self.view = View::Dashboard;
+                self.actions.push(Action::Ask(Confirm::UpdateAll(keys)));
+            }
+            Resume::Install(keys) => {
+                self.view = View::Dashboard;
+                self.actions.push(Action::Install(keys, false));
+            }
+            Resume::Reinstall(key) => {
+                self.view = View::Dashboard;
+                self.actions.push(Action::Ask(Confirm::Reinstall(key)));
+            }
+            Resume::InstallModule(key) => {
+                self.view = View::Dashboard;
+                self.actions.push(Action::Ask(Confirm::InstallModule(key)));
+            }
+            Resume::CleanInstall(plan) => {
+                self.wizard = WizardState {
+                    initialized: true,
+                    editor: plan.editor,
+                    modules: self
+                        .rows
+                        .iter()
+                        .filter(|r| !r.is_editor())
+                        .map(|r| (r.key.clone(), plan.modules.contains(&r.key)))
+                        .collect(),
+                    hasp: plan.hasp,
+                    vcredist: plan.vcredist,
+                };
+                self.view = View::Wizard;
+                self.actions.push(Action::Ask(Confirm::CleanInstall(plan)));
+            }
+            Resume::ApplyTask => {
+                self.view = View::Settings;
+                self.actions.push(Action::ApplyTask);
+            }
+        }
     }
 
     fn install_options(&self, force: bool) -> InstallOptions {
@@ -412,6 +522,12 @@ impl App {
     fn apply_actions(&mut self) {
         let actions = std::mem::take(&mut self.actions);
         for action in actions {
+            if !self.elevated {
+                if let Some(resume) = Self::admin_request(&action) {
+                    self.elevate_for(resume);
+                    break;
+                }
+            }
             match action {
                 Action::Login => {
                     if self.login.user.trim().is_empty() || self.login.pass.is_empty() {
@@ -485,7 +601,6 @@ impl App {
                     self.creds_stored = false;
                 }
                 Action::SaveCreds => self.save_creds = Some(String::new()),
-                Action::RelaunchElevated => self.close_requested = local::relaunch_elevated(),
                 Action::ApplyTask => {
                     let result = if self.cfg.run_at_logon {
                         scheduler::install(self.cfg.daily_check_hour)
@@ -716,34 +831,6 @@ impl App {
                         self.actions.push(Action::Navigate(view));
                     }
                 }
-                if !self.elevated {
-                    ui.add_space(16.0);
-                    Frame::new()
-                        .fill(WARN_SOFT)
-                        .stroke(egui::Stroke::new(1.0_f32, WARN_BORDER))
-                        .corner_radius(CornerRadius::same(8))
-                        .inner_margin(Margin::same(12))
-                        .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.horizontal_top(|ui| {
-                                ui.label(widgets::icon_text(icon::WARNING, 14.0, WARN));
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new("Aplikace neběží s právy správce, instalace proto není možná")
-                                            .size(12.5)
-                                            .color(MUTED),
-                                    )
-                                    .wrap(),
-                                );
-                            });
-                            ui.add_space(8.0);
-                            let w = ui.available_width();
-                            if widgets::button_ex(ui, None, "Spustit jako správce", Btn::Secondary, !self.busy(), w, 32.0).clicked() {
-                                self.actions.push(Action::RelaunchElevated);
-                            }
-                        });
-                }
-
                 ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                     let busy = self.busy();
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), egui::Sense::hover());
@@ -919,6 +1006,7 @@ impl eframe::App for App {
             self.ui_confirm(ctx);
             self.ui_save_creds(ctx);
         }
+        self.resume_pending();
         self.apply_actions();
         if self.close_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
