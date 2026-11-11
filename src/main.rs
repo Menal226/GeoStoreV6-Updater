@@ -5,7 +5,6 @@ mod catalog;
 mod config;
 mod creds;
 mod fmt;
-mod icon_draw;
 mod installer;
 mod local;
 mod logfile;
@@ -86,12 +85,7 @@ fn main() -> eframe::Result<()> {
         selfupdate::spawn(!background);
     }
 
-    let icon_size = 64u32;
-    let icon = egui::IconData {
-        rgba: icon_draw::render_icon(icon_size),
-        width: icon_size,
-        height: icon_size,
-    };
+    let icon = eframe::icon_data::from_png_bytes(app::ICON_PNG).unwrap_or_default();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(WINDOW_TITLE)

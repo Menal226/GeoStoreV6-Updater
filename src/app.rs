@@ -180,14 +180,16 @@ pub struct App {
     pub save_creds: Option<String>,
 }
 
+pub const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
+
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, launch: Launch) -> Self {
         theme::setup(&cc.egui_ctx);
-        let size = 96;
+        let icon = eframe::icon_data::from_png_bytes(ICON_PNG).unwrap_or_default();
         let logo = cc.egui_ctx.load_texture(
             "logo",
-            egui::ColorImage::from_rgba_unmultiplied([size, size], &crate::icon_draw::render_icon(size as u32)),
-            egui::TextureOptions::LINEAR,
+            egui::ColorImage::from_rgba_unmultiplied([icon.width as usize, icon.height as usize], &icon.rgba),
+            egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear)),
         );
         let (tx, rx, cancel) = worker::spawn(cc.egui_ctx.clone());
         let cfg = Config::load();
