@@ -323,6 +323,24 @@ pub fn open_in_explorer(path: &Path) {
     let _ = std::process::Command::new("explorer.exe").arg(path).spawn();
 }
 
+/// A running program cannot delete itself, so a hidden cmd.exe waits for this process to exit and removes what is left.
+pub fn remove_after_exit(files: &[PathBuf], dirs: &[PathBuf]) {
+    use std::os::windows::process::CommandExt;
+    let mut script = String::from("/c ping -n 4 127.0.0.1 >nul");
+    for f in files {
+        script.push_str(&format!(" & del /f /q \"{}\"", f.display()));
+    }
+    for d in dirs {
+        script.push_str(&format!(" & rmdir /s /q \"{}\"", d.display()));
+    }
+    let root = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let _ = std::process::Command::new("cmd.exe")
+        .raw_arg(script)
+        .current_dir(root)
+        .creation_flags(0x0800_0000)
+        .spawn();
+}
+
 /// Going through explorer.exe keeps the browser out of this process's elevated token.
 pub fn open_url(url: &str) {
     let _ = std::process::Command::new("explorer.exe").arg(url).spawn();

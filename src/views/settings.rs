@@ -297,6 +297,16 @@ impl App {
                         }
                     });
                 });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    field_row(ui, "Odinstalace", "");
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let idle = !self.busy() && !self.bg_busy;
+                        if widgets::button(ui, Some(icon::DELETE), "Odinstalovat aplikaci", Btn::Secondary, idle).clicked() {
+                            self.actions.push(Action::Ask(crate::app::Confirm::Uninstall));
+                        }
+                    });
+                });
             });
             ui.add_space(28.0);
         });

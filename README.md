@@ -158,7 +158,7 @@ Ukazuje přihlášeného uživatele a zda je přihlášení uložené ve Správc
 
 ### O aplikaci
 
-Verze aplikace, odkaz na tuto stránku na GitHubu a složka s daty aplikace.
+Verze aplikace, odkaz na tuto stránku na GitHubu, složka s daty aplikace a tlačítko pro [odinstalaci](#odinstalace).
 
 ## Běh na pozadí a oznámení
 
@@ -190,15 +190,13 @@ GeoStore Updater si nové verze sám hlídá na GitHubu. Novou verzi stáhne na 
 
 ## Odinstalace
 
-1. V aplikaci otevřete **Nastavení → Účet** a klikněte na **Odebrat uložené přihlášení**.
-2. Pravým tlačítkem klikněte na ikonu v oznamovací oblasti a zvolte **Ukončit**.
-3. Spusťte **Příkazový řádek jako správce** a odstraňte automatické spouštění:
-   ```
-   schtasks /Delete /TN "GeoStore Updater" /F
-   ```
-4. Smažte soubor `GeoStoreUpdater.exe` a složku `C:\ProgramData\GeoStore Updater`.
+V aplikaci otevřete **Nastavení → O aplikaci** a klikněte na **Odinstalovat aplikaci**. Po potvrzení aplikace:
 
-GeoStore V6 ani nainstalovaná aplikační řešení se odinstalací GeoStore Updateru nijak nezmění.
+- ukončí běh na pozadí a zruší automatické spouštění při přihlášení do Windows,
+- odebere uložené přihlášení ze Správce pověření Windows,
+- zavře se a smaže soubor `GeoStoreUpdater.exe` i složku `C:\ProgramData\GeoStore Updater` s nastavením a protokoly.
+
+GeoStore V6, nainstalovaná aplikační řešení a zálohy v `C:\V6-KONFIG_zalohy` zůstanou beze změny. Během probíhající instalace aktualizací odinstalovat nelze.
 
 ## Řešení problémů
 

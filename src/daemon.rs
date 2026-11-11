@@ -74,6 +74,22 @@ pub fn ensure_running() {
     }
 }
 
+/// Asks the running tray process to quit and waits until it has.
+pub fn stop() {
+    use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
+    unsafe {
+        if let Ok(hwnd) = FindWindowW(w!("GeoStoreUpdaterTray"), PCWSTR::null()) {
+            let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+    }
+    for _ in 0..50 {
+        if lock_file().is_some() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 pub fn run(relaunch: bool) {
     let mut lock = lock_file();
     for _ in 0..(if relaunch { 50 } else { 0 }) {
@@ -382,6 +398,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             LRESULT(0)
         }
+        WM_CLOSE if SHARED.installing.load(Ordering::SeqCst) => LRESULT(0),
         WM_FLUSH => {
             flush(hwnd);
             LRESULT(0)

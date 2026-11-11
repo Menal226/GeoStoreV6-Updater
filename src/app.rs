@@ -65,6 +65,7 @@ pub enum Confirm {
     CleanInstall(CleanPlan),
     Logout,
     CancelOp,
+    Uninstall,
 }
 
 /// Install request carried across the UAC restart, so the elevated copy picks up where the user left off.
@@ -132,6 +133,7 @@ pub enum Action {
     DismissResult,
     ForgetCreds,
     SaveCreds,
+    Uninstall,
 }
 
 pub struct App {
@@ -617,8 +619,28 @@ impl App {
                     self.creds_stored = false;
                 }
                 Action::SaveCreds => self.save_creds = Some(String::new()),
+                Action::Uninstall => self.uninstall(),
             }
         }
+    }
+
+    fn uninstall(&mut self) {
+        daemon::stop();
+        if let Err(e) = scheduler::uninstall() {
+            self.view = View::Dashboard;
+            self.result = Some((false, format!("Odinstalace se nezdařila\n{}", worker::friendly_error(&e))));
+            return;
+        }
+        creds::delete();
+        if let Some(exe) = crate::selfupdate::app_exe() {
+            let mut dirs = vec![paths::data_dir()];
+            if let Some(parent) = exe.parent().filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().contains("geostore updater"))) {
+                dirs.push(parent.to_path_buf());
+            }
+            let old = exe.with_extension("old.exe");
+            local::remove_after_exit(&[exe, old], &dirs);
+        }
+        self.close_requested = true;
     }
 
     fn confirm_ok(&mut self, c: Confirm) {
@@ -635,6 +657,7 @@ impl App {
             Confirm::CleanInstall(plan) => self.actions.push(Action::CleanInstall(plan)),
             Confirm::Logout => self.send(Cmd::Logout),
             Confirm::CancelOp => self.actions.push(Action::Cancel),
+            Confirm::Uninstall => self.actions.push(Action::Uninstall),
         }
     }
 
@@ -718,6 +741,12 @@ impl App {
                 "Přerušit instalaci",
                 None,
             ),
+            Confirm::Uninstall => (
+                "Odinstalovat GeoStore Updater?".into(),
+                "Aplikace přestane běžet na pozadí a smaže se z počítače včetně nastavení, protokolů a uloženého přihlášení. GeoStore V6, nainstalovaná řešení a zálohy v C:\\V6-KONFIG_zalohy zůstanou beze změny.".into(),
+                "Odinstalovat",
+                None,
+            ),
             Confirm::Logout => (
                 "Odhlásit se?".into(),
                 "Uložené přihlašovací údaje budou odstraněny. Automatické aktualizace nebudou fungovat, dokud se znovu nepřihlásíte.".into(),
@@ -747,7 +776,7 @@ impl App {
             ui.add_space(8.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                let kind = if matches!(c, Confirm::Logout | Confirm::CancelOp) { Btn::Danger } else { Btn::Primary };
+                let kind = if matches!(c, Confirm::Logout | Confirm::CancelOp | Confirm::Uninstall) { Btn::Danger } else { Btn::Primary };
                 let back = if c == Confirm::CancelOp { "Pokračovat" } else { "Zrušit" };
                 if widgets::button_sized(ui, None, back, Btn::Secondary, true, 96.0).clicked() {
                     close = true;

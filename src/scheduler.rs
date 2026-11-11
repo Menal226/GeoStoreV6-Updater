@@ -82,3 +82,15 @@ pub fn install() -> Result<()> {
     Ok(())
 }
 
+pub fn uninstall() -> Result<()> {
+    let query = schtasks(&["/Query", "/TN", TASK_NAME]).context("Nelze spustit schtasks.exe")?;
+    if !query.status.success() {
+        return Ok(());
+    }
+    let out = schtasks(&["/Delete", "/TN", TASK_NAME, "/F"]).context("Nelze spustit schtasks.exe")?;
+    if !out.status.success() {
+        bail!("Naplánovanou úlohu „{TASK_NAME}“ se nepodařilo odstranit.");
+    }
+    Ok(())
+}
+
