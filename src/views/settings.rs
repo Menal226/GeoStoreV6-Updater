@@ -1,4 +1,5 @@
 use crate::app::{Action, App};
+use crate::config::CheckMode;
 use crate::fmt;
 use crate::installer;
 use crate::{local, paths};
@@ -10,11 +11,18 @@ const INTERVALS: [u32; 6] = [1, 2, 4, 8, 12, 24];
 const VALUE_COL: f32 = 200.0;
 const REPO_URL: &str = "https://github.com/Menal226/GeoStoreV6-Updater";
 
-fn hours_label(h: u32) -> String {
+fn interval_label(h: u32) -> String {
     match h {
-        1 => "1 hodinu".into(),
-        2..=4 => format!("{h} hodiny"),
-        _ => format!("{h} hodin"),
+        1 => "každou hodinu".into(),
+        2..=4 => format!("každé {h} hodiny"),
+        _ => format!("každých {h} hodin"),
+    }
+}
+
+fn mode_label(mode: CheckMode) -> &'static str {
+    match mode {
+        CheckMode::Interval => "Pravidelně",
+        CheckMode::Daily => "Jednou denně",
     }
 }
 
@@ -66,7 +74,6 @@ impl App {
     pub(crate) fn ui_settings(&mut self, ui: &mut egui::Ui) {
         widgets::page_header(ui, "Nastavení", "", None, |_| {});
         let mut changed = false;
-        let mut task_changed = false;
 
         widgets::scroll_page(ui, "settings_scroll", |ui| {
             widgets::card(ui, |ui| {
@@ -76,57 +83,63 @@ impl App {
                 widgets::indented(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.set_min_height(32.0);
-                        ui.label(RichText::new("Při spuštěné aplikaci kontrolovat každé").size(13.0).color(MUTED));
                         ui.add_enabled_ui(self.cfg.auto_check, |ui| {
                             combo(ui, |ui| {
-                                egui::ComboBox::from_id_salt("interval")
-                                    .width(110.0)
+                                egui::ComboBox::from_id_salt("check_mode")
+                                    .width(130.0)
                                     .icon(widgets::chevron)
-                                    .selected_text(hours_label(self.cfg.check_interval_hours))
+                                    .selected_text(mode_label(self.cfg.check_mode))
                                     .show_ui(ui, |ui| {
-                                        for h in INTERVALS {
-                                            changed |= ui.selectable_value(&mut self.cfg.check_interval_hours, h, hours_label(h)).changed();
+                                        for mode in [CheckMode::Interval, CheckMode::Daily] {
+                                            changed |= ui.selectable_value(&mut self.cfg.check_mode, mode, mode_label(mode)).changed();
                                         }
                                     });
+                                match self.cfg.check_mode {
+                                    CheckMode::Interval => {
+                                        egui::ComboBox::from_id_salt("interval")
+                                            .width(150.0)
+                                            .icon(widgets::chevron)
+                                            .selected_text(interval_label(self.cfg.check_interval_hours))
+                                            .show_ui(ui, |ui| {
+                                                for h in INTERVALS {
+                                                    changed |= ui.selectable_value(&mut self.cfg.check_interval_hours, h, interval_label(h)).changed();
+                                                }
+                                            });
+                                    }
+                                    CheckMode::Daily => {
+                                        ui.label(RichText::new("v").size(13.0).color(MUTED));
+                                        egui::ComboBox::from_id_salt("hour")
+                                            .width(56.0)
+                                            .icon(widgets::chevron)
+                                            .selected_text(format!("{:02}", self.cfg.daily_check_hour))
+                                            .show_ui(ui, |ui| {
+                                                for h in 0..24u32 {
+                                                    changed |= ui.selectable_value(&mut self.cfg.daily_check_hour, h, format!("{h:02}")).changed();
+                                                }
+                                            });
+                                        ui.label(RichText::new(":").size(13.0).color(MUTED));
+                                        egui::ComboBox::from_id_salt("minute")
+                                            .width(56.0)
+                                            .icon(widgets::chevron)
+                                            .selected_text(format!("{:02}", self.cfg.daily_check_minute))
+                                            .show_ui(ui, |ui| {
+                                                for m in (0..60u32).step_by(5) {
+                                                    changed |= ui.selectable_value(&mut self.cfg.daily_check_minute, m, format!("{m:02}")).changed();
+                                                }
+                                            });
+                                    }
+                                }
                             });
                         });
                     });
                 });
                 ui.add_space(8.0);
                 changed |= widgets::checkbox(ui, &mut self.cfg.auto_install, label("Nalezené aktualizace instalovat automaticky"), true).changed();
-                ui.add_space(12.0);
-                if widgets::checkbox(ui, &mut self.cfg.run_at_logon, label("Kontrolovat při přihlášení do Windows a jednou denně"), true).changed() {
-                    task_changed = true;
+                if let Some(err) = &self.task_error {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(format!("Aplikace se nebude spouštět s Windows: {err}")).size(13.0).color(DANGER));
                 }
-                widgets::indented(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.set_min_height(32.0);
-                        ui.label(RichText::new("Čas denní kontroly").size(13.0).color(MUTED));
-                        ui.add_enabled_ui(self.cfg.run_at_logon, |ui| {
-                            combo(ui, |ui| {
-                                egui::ComboBox::from_id_salt("hour")
-                                    .width(80.0)
-                                    .icon(widgets::chevron)
-                                    .selected_text(format!("{:02}:00", self.cfg.daily_check_hour))
-                                    .show_ui(ui, |ui| {
-                                        for h in 0..24u32 {
-                                            if ui.selectable_value(&mut self.cfg.daily_check_hour, h, format!("{h:02}:00")).changed() {
-                                                task_changed = true;
-                                            }
-                                        }
-                                    });
-                            });
-                        });
-                    });
-                    if self.task_installed {
-                        widgets::mark_label(ui, widgets::Mark::Success, "Naplánovaná úloha „GeoStore Updater“ je aktivní", 13.0);
-                        widgets::muted(ui, "Program po zapnutí úlohy nepřesouvejte");
-                    }
-                    if let Some(err) = &self.task_error {
-                        ui.label(RichText::new(err).size(13.0).color(DANGER));
-                    }
-                });
-                if (self.cfg.auto_check || self.cfg.run_at_logon) && !self.creds_stored {
+                if self.cfg.auto_check && !self.creds_stored {
                     ui.add_space(8.0);
                     Frame::new()
                         .fill(WARN_SOFT)
@@ -140,7 +153,7 @@ impl App {
                                 ui.spacing_mut().item_spacing.x = 10.0;
                                 ui.label(widgets::icon_text(icon::WARNING, 14.0, WARN));
                                 ui.label(
-                                    RichText::new("Automatická kontrola po spuštění aplikace a naplánovaná úloha vyžadují uložené přihlášení")
+                                    RichText::new("Automatická kontrola vyžaduje uložené přihlášení")
                                         .size(13.0)
                                         .color(TEXT),
                                 );
@@ -290,9 +303,6 @@ impl App {
 
         if changed {
             self.cfg.save();
-        }
-        if task_changed {
-            self.actions.push(Action::ApplyTask);
         }
     }
 }

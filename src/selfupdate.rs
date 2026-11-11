@@ -10,7 +10,6 @@ use std::time::Duration;
 const LATEST_RELEASE: &str = "https://api.github.com/repos/Menal226/GeoStoreV6-Updater/releases/latest";
 const ASSET: &str = "GeoStoreUpdater.exe";
 const CURRENT: &str = env!("CARGO_PKG_VERSION");
-const RECHECK: Duration = Duration::from_secs(24 * 3600);
 
 #[derive(Deserialize)]
 struct Release {
@@ -41,21 +40,6 @@ fn old_path(exe: &Path) -> PathBuf {
 
 fn staged_path() -> PathBuf {
     paths::sub("update").join(ASSET)
-}
-
-/// Checks GitHub daily without blocking the caller, until a new version is in place.
-pub fn spawn(check_now: bool) {
-    if cfg!(debug_assertions) {
-        return;
-    }
-    std::thread::spawn(move || {
-        if !check_now {
-            std::thread::sleep(RECHECK);
-        }
-        while !run() {
-            std::thread::sleep(RECHECK);
-        }
-    });
 }
 
 /// True once a newer version has replaced the program on disk.

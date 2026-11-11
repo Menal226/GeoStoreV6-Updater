@@ -4,6 +4,7 @@ mod app;
 mod catalog;
 mod config;
 mod creds;
+mod daemon;
 mod fmt;
 mod installer;
 mod local;
@@ -50,9 +51,13 @@ fn focus_existing() {
 }
 
 fn main() -> eframe::Result<()> {
-    let background = std::env::args().any(|a| a.eq_ignore_ascii_case("--background"));
+    let flag = |name: &str| std::env::args().any(|a| a.eq_ignore_ascii_case(name));
+    let relaunch = flag("--relaunch");
+    if flag("--daemon") || flag("--background") {
+        daemon::run(relaunch);
+        return Ok(());
+    }
 
-    let relaunch = std::env::args().any(|a| a.eq_ignore_ascii_case("--relaunch"));
     let mut lock = acquire_instance_lock();
     for _ in 0..(if relaunch { 50 } else { 0 }) {
         if lock.is_some() {
@@ -62,28 +67,9 @@ fn main() -> eframe::Result<()> {
         lock = acquire_instance_lock();
     }
     let Some(_lock) = lock else {
-        if !background {
-            focus_existing();
-        }
+        focus_existing();
         return Ok(());
     };
-
-    let mut replaced = false;
-    if background {
-        replaced = selfupdate::run();
-        match logic::background_check() {
-            Ok(0) => return Ok(()),
-            Ok(n) => logfile::write(logfile::Level::Info, &format!("Automatická kontrola: nalezeno {n} aktualizací.")),
-            Err(e) => {
-                logfile::write(logfile::Level::Error, &format!("Automatická kontrola selhala: {}", worker::friendly_error(&e)));
-                return Ok(());
-            }
-        }
-    }
-
-    if !replaced {
-        selfupdate::spawn(!background);
-    }
 
     let icon = eframe::icon_data::from_png_bytes(app::ICON_PNG).unwrap_or_default();
     let options = eframe::NativeOptions {
@@ -97,6 +83,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         WINDOW_TITLE,
         options,
-        Box::new(move |cc| Ok(Box::new(app::App::new(cc, app::Launch { background, relaunch })))),
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, app::Launch { relaunch })))),
     )
 }

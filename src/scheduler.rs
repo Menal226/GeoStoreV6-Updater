@@ -1,6 +1,5 @@
 use crate::paths;
 use anyhow::{bail, Context, Result};
-use chrono::Local;
 use std::os::windows::process::CommandExt;
 use std::process::Command;
 
@@ -21,20 +20,13 @@ fn schtasks(args: &[&str]) -> std::io::Result<std::process::Output> {
         .output()
 }
 
-pub fn is_installed() -> bool {
-    schtasks(&["/Query", "/TN", TASK_NAME])
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-pub fn install(hour: u32) -> Result<()> {
+pub fn install() -> Result<()> {
     let exe = crate::selfupdate::app_exe().context("Nelze zjistit cestu k programu")?;
     let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
         (Ok(d), Ok(u)) => format!("{d}\\{u}"),
         (_, Ok(u)) => u,
         _ => bail!("Nelze zjistit přihlášeného uživatele"),
     };
-    let start = format!("{}T{:02}:00:00", Local::now().format("%Y-%m-%d"), hour.min(23));
     let xml = format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -45,15 +37,8 @@ pub fn install(hour: u32) -> Result<()> {
     <LogonTrigger>
       <Enabled>true</Enabled>
       <UserId>{user}</UserId>
-      <Delay>PT2M</Delay>
+      <Delay>PT30S</Delay>
     </LogonTrigger>
-    <CalendarTrigger>
-      <StartBoundary>{start}</StartBoundary>
-      <Enabled>true</Enabled>
-      <ScheduleByDay>
-        <DaysInterval>1</DaysInterval>
-      </ScheduleByDay>
-    </CalendarTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
@@ -67,7 +52,6 @@ pub fn install(hour: u32) -> Result<()> {
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <StartWhenAvailable>true</StartWhenAvailable>
-    <RunOnlyIfNetworkAvailable>true</RunOnlyIfNetworkAvailable>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
     <AllowStartOnDemand>true</AllowStartOnDemand>
     <Enabled>true</Enabled>
@@ -75,13 +59,12 @@ pub fn install(hour: u32) -> Result<()> {
   <Actions Context="Author">
     <Exec>
       <Command>"{exe}"</Command>
-      <Arguments>--background</Arguments>
+      <Arguments>--daemon</Arguments>
     </Exec>
   </Actions>
 </Task>
 "#,
         user = xml_escape(&user),
-        start = start,
         exe = xml_escape(&exe.to_string_lossy()),
     );
     let path = paths::data_dir().join("task.xml");
@@ -99,13 +82,3 @@ pub fn install(hour: u32) -> Result<()> {
     Ok(())
 }
 
-pub fn uninstall() -> Result<()> {
-    if !is_installed() {
-        return Ok(());
-    }
-    let out = schtasks(&["/Delete", "/TN", TASK_NAME, "/F"]).context("Nelze spustit schtasks.exe")?;
-    if !out.status.success() {
-        bail!("Naplánovanou úlohu se nepodařilo odstranit.");
-    }
-    Ok(())
-}

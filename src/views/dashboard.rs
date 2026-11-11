@@ -5,7 +5,6 @@ use crate::theme::*;
 use crate::widgets::{self, icon, Btn, Mark, Tone};
 use chrono::Local;
 use eframe::egui::{self, Align, CornerRadius, Frame, Layout, Margin, RichText, Stroke};
-use std::time::Instant;
 
 const TILE: f32 = 40.0;
 const TILE_GAP: f32 = 12.0;
@@ -177,7 +176,16 @@ impl App {
             {
                 self.ui_operation(ui);
                 self.ui_result(ui);
-                self.ui_countdown(ui);
+                if self.bg_busy {
+                    widgets::banner(
+                        ui,
+                        Tone::Info,
+                        "Probíhá automatická instalace aktualizací",
+                        "Přehled se obnoví po jejím dokončení.",
+                        0.0,
+                        |_| {},
+                    );
+                }
 
                 if let Some(err) = self.check_error.clone() {
                     widgets::banner(ui, Tone::Danger, "Kontrola aktualizací selhala", &err, 0.0, |_| {});
@@ -229,11 +237,10 @@ impl App {
     }
 
     fn ui_next_check(&self, ui: &mut egui::Ui) {
-        if !self.cfg.auto_check || self.op.is_some() {
+        if !self.cfg.auto_check || !self.creds_stored || self.op.is_some() || self.bg_busy {
             return;
         }
-        let Some(last) = self.last_check else { return };
-        let next = last + chrono::Duration::hours(self.cfg.check_interval_hours.max(1) as i64);
+        let next = self.cfg.next_check(self.last_auto_check);
         let text = if next <= Local::now() {
             "Další automatická kontrola proběhne za chvíli".to_string()
         } else {
@@ -244,20 +251,6 @@ impl App {
             ui.add_space(4.0);
             ui.label(widgets::icon_text(icon::REFRESH, 12.0, SUBTLE));
             ui.label(RichText::new(text).size(12.5).color(SUBTLE));
-        });
-    }
-
-    fn ui_countdown(&mut self, ui: &mut egui::Ui) {
-        let Some(at) = self.countdown else { return };
-        let secs = at.saturating_duration_since(Instant::now()).as_secs() + 1;
-        let text = format!("Instalace začne za {secs} s. Automatickou instalaci vypnete v Nastavení");
-        widgets::banner(ui, Tone::Info, "Aktualizace se nainstalují automaticky", &text, 248.0, |ui| {
-            if widgets::button(ui, Some(icon::PLAY), "Instalovat hned", Btn::Primary, true).clicked() {
-                self.actions.push(Action::InstallNow);
-            }
-            if widgets::button(ui, None, "Nyní ne", Btn::Secondary, true).clicked() {
-                self.actions.push(Action::DismissCountdown);
-            }
         });
     }
 

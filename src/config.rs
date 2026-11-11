@@ -11,10 +11,11 @@ pub type Manifest = BTreeMap<String, (u64, u64)>;
 #[serde(default)]
 pub struct Config {
     pub auto_check: bool,
+    pub check_mode: CheckMode,
     pub check_interval_hours: u32,
-    pub auto_install: bool,
-    pub run_at_logon: bool,
     pub daily_check_hour: u32,
+    pub daily_check_minute: u32,
+    pub auto_install: bool,
     pub backup_konfig: bool,
     pub keep_downloads: bool,
     pub remember_login: bool,
@@ -22,14 +23,22 @@ pub struct Config {
     pub tracked: BTreeMap<String, bool>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CheckMode {
+    #[default]
+    Interval,
+    Daily,
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             auto_check: true,
+            check_mode: CheckMode::Interval,
             check_interval_hours: 4,
-            auto_install: false,
-            run_at_logon: false,
             daily_check_hour: 8,
+            daily_check_minute: 0,
+            auto_install: false,
             backup_konfig: true,
             keep_downloads: false,
             remember_login: true,
@@ -51,6 +60,31 @@ impl Config {
     pub fn is_tracked(&self, key: &str, detected: bool) -> bool {
         self.tracked.get(key).copied().unwrap_or(detected)
     }
+
+    /// When the background check is due. A daily slot missed while the computer was off is caught up right away.
+    pub fn next_check(&self, last: Option<DateTime<Local>>) -> DateTime<Local> {
+        let now = Local::now();
+        let Some(last) = last else { return DateTime::<chrono::Utc>::UNIX_EPOCH.with_timezone(&Local) };
+        match self.check_mode {
+            CheckMode::Interval => last + chrono::Duration::hours(self.check_interval_hours.max(1) as i64),
+            CheckMode::Daily => {
+                let slot = |date: NaiveDate| {
+                    date.and_hms_opt(self.daily_check_hour.min(23), self.daily_check_minute.min(59), 0)
+                        .and_then(|t| t.and_local_timezone(Local).earliest())
+                        .unwrap_or(now)
+                };
+                let today = slot(now.date_naive());
+                let previous = if now >= today { today } else { slot(now.date_naive() - chrono::Days::new(1)) };
+                if last < previous {
+                    previous
+                } else if now < today {
+                    today
+                } else {
+                    slot(now.date_naive() + chrono::Days::new(1))
+                }
+            }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -68,6 +102,7 @@ pub struct InstalledRecord {
 pub struct State {
     pub packages: BTreeMap<String, InstalledRecord>,
     pub last_check: Option<DateTime<Local>>,
+    pub last_auto_check: Option<DateTime<Local>>,
     pub sizes: BTreeMap<String, u64>,
 }
 
@@ -78,6 +113,14 @@ impl State {
 
     pub fn save(&self) {
         save_json(&paths::data_dir().join("state.json"), self);
+    }
+
+    /// The tray process and the window both write this file, so changes go onto the latest copy on disk.
+    pub fn update(f: impl FnOnce(&mut State)) -> State {
+        let mut state = Self::load();
+        f(&mut state);
+        state.save();
+        state
     }
 }
 

@@ -79,13 +79,15 @@ pub enum Event {
 #[derive(Clone)]
 pub struct Emitter {
     tx: Sender<Event>,
-    ctx: eframe::egui::Context,
+    ctx: Option<eframe::egui::Context>,
 }
 
 impl Emitter {
     pub fn send(&self, e: Event) {
         let _ = self.tx.send(e);
-        self.ctx.request_repaint();
+        if let Some(ctx) = &self.ctx {
+            ctx.request_repaint();
+        }
     }
 
     pub fn log(&self, level: Level, text: impl Into<String>) {
@@ -109,7 +111,7 @@ impl Emitter {
     }
 }
 
-pub fn spawn(ctx: eframe::egui::Context) -> (Sender<Cmd>, Receiver<Event>, Arc<AtomicBool>) {
+pub fn spawn(ctx: Option<eframe::egui::Context>) -> (Sender<Cmd>, Receiver<Event>, Arc<AtomicBool>) {
     let (cmd_tx, cmd_rx) = channel::<Cmd>();
     let (ev_tx, ev_rx) = channel::<Event>();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -166,6 +168,22 @@ struct Worker {
     state: State,
 }
 
+/// Held while packages are being installed, so the window and the tray process never install at the same time.
+fn operation_lock() -> Option<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .share_mode(0)
+        .open(paths::data_dir().join("operation.lock"))
+        .ok()
+}
+
+pub fn operation_running() -> bool {
+    operation_lock().is_none()
+}
+
 pub fn friendly_error(e: &anyhow::Error) -> String {
     for cause in e.chain() {
         if let Some(re) = cause.downcast_ref::<reqwest::Error>() {
@@ -181,6 +199,7 @@ pub fn friendly_error(e: &anyhow::Error) -> String {
 
 impl Worker {
     fn handle(&mut self, cmd: Cmd) {
+        self.state = State::load();
         match cmd {
             Cmd::Login { user, pass, remember } => self.login(user, pass, remember),
             Cmd::Logout => {
@@ -255,8 +274,7 @@ impl Worker {
         match self.with_portal(|p, _| p.list_files()) {
             Ok(files) => {
                 self.files = files;
-                self.state.last_check = Some(Local::now());
-                self.state.save();
+                self.state = State::update(|s| s.last_check = Some(Local::now()));
                 let rows = self.rows();
                 let pending = rows
                     .iter()
@@ -361,7 +379,10 @@ impl Worker {
         let result = if jobs.is_empty() && extras.licence.is_none() {
             Err(anyhow!("Nebyl vybrán žádný balíček k instalaci."))
         } else {
-            self.run_jobs(jobs, &opts, extras)
+            match operation_lock() {
+                Some(_lock) => self.run_jobs(jobs, &opts, extras),
+                None => Err(anyhow!("Na pozadí už probíhá jiná instalace. Zkuste to znovu po jejím dokončení.")),
+            }
         };
         self.em.send(Event::WaitingForGeoStore(false));
         let (ok, summary) = match result {
@@ -621,8 +642,10 @@ impl Worker {
                 }));
             })
         })?;
-        self.state.sizes.insert(job.file.title.clone(), total);
-        self.state.save();
+        let title = job.file.title.clone();
+        self.state = State::update(|s| {
+            s.sizes.insert(title, total);
+        });
         self.em.log(
             Level::Info,
             format!("Staženo {} za {}.", fmt::mb(total), fmt::duration(started.elapsed().as_secs())),
@@ -801,18 +824,17 @@ impl Worker {
     }
 
     fn record(&mut self, key: &str, file: &RemoteFile, version: Option<String>, complete: bool) {
-        self.state.packages.insert(
-            key.to_string(),
-            InstalledRecord {
-                portal_date: file.date,
-                record_id: file.id.clone(),
-                file: file.title.clone(),
-                installed_at: Local::now(),
-                version,
-                complete,
-            },
-        );
-        self.state.save();
+        let record = InstalledRecord {
+            portal_date: file.date,
+            record_id: file.id.clone(),
+            file: file.title.clone(),
+            installed_at: Local::now(),
+            version,
+            complete,
+        };
+        self.state = State::update(|s| {
+            s.packages.insert(key.to_string(), record);
+        });
     }
 }
 

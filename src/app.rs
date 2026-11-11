@@ -1,5 +1,5 @@
 use crate::catalog::EDITOR;
-use crate::config::Config;
+use crate::config::{Config, State};
 use crate::fmt;
 use crate::logfile::{self, LogLine};
 use crate::logic::{self, PackageRow, Status};
@@ -7,7 +7,7 @@ use crate::portal::Licence;
 use crate::theme::{self, *};
 use crate::widgets::{self, icon, Btn};
 use crate::worker::{self, CleanPlan, Cmd, Event, InstallOptions, Progress};
-use crate::{creds, local, paths, scheduler};
+use crate::{creds, daemon, local, paths, scheduler};
 use chrono::{DateTime, Local};
 use eframe::egui::{self, Align, CornerRadius, Frame, Layout, Margin, RichText};
 use std::collections::BTreeMap;
@@ -17,12 +17,10 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-pub const AUTO_INSTALL_DELAY: Duration = Duration::from_secs(15);
 const MAX_LOG_LINES: usize = 6000;
 
 #[derive(Default, Clone, Copy)]
 pub struct Launch {
-    pub background: bool,
     pub relaunch: bool,
 }
 
@@ -77,7 +75,6 @@ enum Resume {
     Reinstall(String),
     InstallModule(String),
     CleanInstall(CleanPlan),
-    ApplyTask,
 }
 
 impl Resume {
@@ -133,11 +130,8 @@ pub enum Action {
     Ask(Confirm),
     Navigate(View),
     DismissResult,
-    InstallNow,
-    DismissCountdown,
     ForgetCreds,
     SaveCreds,
-    ApplyTask,
 }
 
 pub struct App {
@@ -161,14 +155,12 @@ pub struct App {
     pub show_detail: bool,
     pub geostore_running: bool,
     last_poll: Instant,
-    pub background_launch: bool,
-    pub countdown: Option<Instant>,
-    countdown_dismissed: bool,
+    pub bg_busy: bool,
+    pub last_auto_check: Option<DateTime<Local>>,
     pub wizard: WizardState,
     pub licences: Licences,
     pub confirm: Option<Confirm>,
     pub actions: Vec<Action>,
-    pub task_installed: bool,
     pub task_error: Option<String>,
     pub creds_stored: bool,
     auto_login_started: bool,
@@ -176,7 +168,6 @@ pub struct App {
     title_styled: bool,
     close_requested: bool,
     resume: Option<Resume>,
-    last_auto_check: Instant,
     pub save_creds: Option<String>,
 }
 
@@ -191,7 +182,7 @@ impl App {
             egui::ColorImage::from_rgba_unmultiplied([icon.width as usize, icon.height as usize], &icon.rgba),
             egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear)),
         );
-        let (tx, rx, cancel) = worker::spawn(cc.egui_ctx.clone());
+        let (tx, rx, cancel) = worker::spawn(Some(cc.egui_ctx.clone()));
         let cfg = Config::load();
         let stored = creds::load();
         let mut login = LoginForm {
@@ -203,10 +194,9 @@ impl App {
             login.user = u.clone();
         }
         let mut task_error = None;
-        if cfg.run_at_logon {
-            if let Err(e) = scheduler::install(cfg.daily_check_hour) {
-                task_error = Some(worker::friendly_error(&e));
-            }
+        if !cfg!(debug_assertions) || std::env::var_os("GSU_DAEMON").is_some() {
+            task_error = scheduler::install().err().map(|e| worker::friendly_error(&e));
+            daemon::ensure_running();
         }
         let mut app = Self {
             tx,
@@ -228,14 +218,12 @@ impl App {
             show_detail: false,
             geostore_running: local::is_geostore_running(),
             last_poll: Instant::now(),
-            background_launch: launch.background,
-            countdown: None,
-            countdown_dismissed: false,
+            bg_busy: worker::operation_running(),
+            last_auto_check: State::load().last_auto_check,
             wizard: WizardState::default(),
             licences: Licences::Idle,
             confirm: None,
             actions: Vec::new(),
-            task_installed: scheduler::is_installed(),
             task_error,
             creds_stored: stored.is_some(),
             auto_login_started: false,
@@ -243,7 +231,6 @@ impl App {
             title_styled: false,
             close_requested: false,
             resume: Resume::take(launch.relaunch),
-            last_auto_check: Instant::now(),
             save_creds: None,
             cfg,
         };
@@ -326,7 +313,7 @@ impl App {
     }
 
     pub fn can_install(&self) -> bool {
-        self.op.is_none()
+        self.op.is_none() && !self.bg_busy
     }
 
     fn admin_request(action: &Action) -> Option<Resume> {
@@ -337,14 +324,12 @@ impl App {
             Action::Ask(Confirm::CleanInstall(p)) => Some(Resume::CleanInstall(p.clone())),
             Action::Install(k, _) => Some(Resume::Install(k.clone())),
             Action::CleanInstall(p) => Some(Resume::CleanInstall(p.clone())),
-            Action::ApplyTask => Some(Resume::ApplyTask),
             _ => None,
         }
     }
 
     /// Restarts through the UAC prompt and hands the request to the elevated copy.
     fn elevate_for(&mut self, resume: Resume) {
-        let task = matches!(resume, Resume::ApplyTask);
         self.cfg.save();
         resume.save();
         if local::relaunch_elevated() {
@@ -352,11 +337,7 @@ impl App {
             return;
         }
         let _ = std::fs::remove_file(Resume::path());
-        if task {
-            self.task_error = Some("Naplánovaná úloha vyžaduje práva správce, oprávnění nebylo uděleno.".into());
-        } else {
-            self.result = Some((false, "Instalace vyžaduje práva správce, oprávnění nebylo uděleno.".into()));
-        }
+        self.result = Some((false, "Instalace vyžaduje práva správce, oprávnění nebylo uděleno.".into()));
     }
 
     fn resume_pending(&mut self) {
@@ -399,10 +380,6 @@ impl App {
                 self.view = View::Wizard;
                 self.actions.push(Action::Ask(Confirm::CleanInstall(plan)));
             }
-            Resume::ApplyTask => {
-                self.view = View::Settings;
-                self.actions.push(Action::ApplyTask);
-            }
         }
     }
 
@@ -415,7 +392,7 @@ impl App {
         }
     }
 
-    fn pump_events(&mut self, ctx: &egui::Context) {
+    fn pump_events(&mut self) {
         while let Ok(ev) = self.rx.try_recv() {
             match ev {
                 Event::LoggedIn { user } => {
@@ -439,7 +416,6 @@ impl App {
                     self.licences = Licences::Idle;
                     self.rows.clear();
                     self.creds_stored = false;
-                    self.countdown = None;
                 }
                 Event::Checking => self.checking = true,
                 Event::Overview { rows, checked_at } => {
@@ -447,13 +423,11 @@ impl App {
                     self.last_check = checked_at;
                     self.checking = false;
                     self.check_error = None;
-                    self.last_auto_check = Instant::now();
-                    self.on_overview(ctx);
+                    self.on_overview();
                 }
                 Event::CheckFailed(e) => {
                     self.checking = false;
                     self.check_error = Some(e);
-                    self.last_auto_check = Instant::now();
                 }
                 Event::OpStarted { title } => {
                     let keys = self.op.take().map(|o| o.keys).unwrap_or_default();
@@ -506,20 +480,26 @@ impl App {
         }
     }
 
-    fn on_overview(&mut self, ctx: &egui::Context) {
-        let pending = self.pending_keys();
-        if pending.is_empty() {
-            self.countdown = None;
-            return;
-        }
+    fn on_overview(&mut self) {
         if std::mem::take(&mut self.preview_confirm) {
-            self.confirm = Some(Confirm::UpdateAll(pending.clone()));
+            let pending = self.pending_keys();
+            if !pending.is_empty() {
+                self.confirm = Some(Confirm::UpdateAll(pending));
+            }
         }
-        if self.background_launch {
-            ctx.send_viewport_cmd(egui::ViewportCommand::RequestUserAttention(egui::UserAttentionType::Informational));
-        }
-        if self.cfg.auto_install && !self.countdown_dismissed && self.op.is_none() && self.elevated && self.countdown.is_none() {
-            self.countdown = Some(Instant::now() + AUTO_INSTALL_DELAY);
+    }
+
+    /// The tray process checks and installs on its own; when it has, the window reloads the overview.
+    fn poll_background(&mut self) {
+        let last = State::load().last_auto_check;
+        let checked = last != self.last_auto_check;
+        self.last_auto_check = last;
+        let busy = self.op.is_none() && worker::operation_running();
+        let finished = self.bg_busy && !busy;
+        self.bg_busy = busy;
+        if (checked || finished) && self.logged_in && !self.checking && self.op.is_none() {
+            self.checking = true;
+            self.send(Cmd::Check);
         }
     }
 
@@ -535,23 +515,7 @@ impl App {
         if self.last_poll.elapsed() > Duration::from_secs(3) {
             self.last_poll = Instant::now();
             self.geostore_running = local::is_geostore_running();
-        }
-        let interval = Duration::from_secs(self.cfg.check_interval_hours.max(1) as u64 * 3600);
-        if self.logged_in && self.cfg.auto_check && !self.checking && self.op.is_none() && self.last_auto_check.elapsed() > interval {
-            self.last_auto_check = Instant::now();
-            self.checking = true;
-            self.send(Cmd::Check);
-        }
-        if let Some(at) = self.countdown {
-            if self.op.is_some() {
-                self.countdown = None;
-            } else if Instant::now() >= at {
-                self.countdown = None;
-                let keys = self.pending_keys();
-                if !keys.is_empty() {
-                    self.start_install(keys, false);
-                }
-            }
+            self.poll_background();
         }
         ctx.request_repaint_after(Duration::from_millis(500));
     }
@@ -634,30 +598,11 @@ impl App {
                 Action::Ask(c) => self.confirm = Some(c),
                 Action::Navigate(v) => self.view = v,
                 Action::DismissResult => self.result = None,
-                Action::InstallNow => {
-                    self.countdown = None;
-                    let keys = self.pending_keys();
-                    self.start_install(keys, false);
-                }
-                Action::DismissCountdown => {
-                    self.countdown = None;
-                    self.countdown_dismissed = true;
-                }
                 Action::ForgetCreds => {
                     creds::delete();
                     self.creds_stored = false;
                 }
                 Action::SaveCreds => self.save_creds = Some(String::new()),
-                Action::ApplyTask => {
-                    let result = if self.cfg.run_at_logon {
-                        scheduler::install(self.cfg.daily_check_hour)
-                    } else {
-                        scheduler::uninstall()
-                    };
-                    self.task_error = result.err().map(|e| worker::friendly_error(&e));
-                    self.task_installed = scheduler::is_installed();
-                    self.cfg.save();
-                }
             }
         }
     }
@@ -1042,7 +987,7 @@ impl eframe::App for App {
         if !self.title_styled {
             self.title_styled = local::style_title_bar(crate::WINDOW_TITLE);
         }
-        self.pump_events(ctx);
+        self.pump_events();
         self.tick(ctx);
         if !self.logged_in {
             self.ui_login(ctx);

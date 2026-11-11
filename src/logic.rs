@@ -1,8 +1,8 @@
 use crate::catalog::{self, ModuleInfo, Variant, EDITOR};
 use crate::config::{Config, State};
 use crate::local::{self, DavkaLog};
-use crate::portal::{Portal, RemoteFile};
-use chrono::{Duration, Local, NaiveDate};
+use crate::portal::RemoteFile;
+use chrono::{Duration, NaiveDate};
 use std::collections::BTreeMap;
 
 // Timestamps copied from a package are a few days older than its portal date, so the
@@ -124,20 +124,4 @@ pub fn pending_keys(rows: &[PackageRow], cfg: &Config) -> Vec<String> {
         .filter(|r| cfg.is_tracked(&r.key, r.detected) && r.status == Status::UpdateAvailable)
         .map(|r| r.key.clone())
         .collect()
-}
-
-/// Runs from the scheduled task before any window is created. Returns how many tracked packages need an update.
-pub fn background_check() -> anyhow::Result<usize> {
-    let cfg = Config::load();
-    let Some((user, pass)) = crate::creds::load() else {
-        return Ok(0);
-    };
-    let mut portal = Portal::new()?;
-    portal.login(&user, &pass)?;
-    let files = portal.list_files()?;
-    let mut state = State::load();
-    state.last_check = Some(Local::now());
-    state.save();
-    let rows = compute_rows(&files, &state);
-    Ok(pending_keys(&rows, &cfg).len())
 }

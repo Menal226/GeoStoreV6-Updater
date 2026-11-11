@@ -30,10 +30,12 @@ version = "0.58"
 features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
     "Win32_Security_Credentials",
     "Win32_Storage_FileSystem",
     "Win32_System_ApplicationInstallationAndServicing",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_LibraryLoader",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ]
