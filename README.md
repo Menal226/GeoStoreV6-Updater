@@ -1,6 +1,6 @@
 # GeoStore Updater
 
-GeoStore Updater hlídá a instaluje aktualizace programu **GeoStore V6** a jeho aplikačních řešení (V6-DTMČR, V6-IG, V6-3D, Rozšíření DWG-DGN a další) přímo z portálu technické podpory [portal.geostore.cz](https://portal.geostore.cz).
+GeoStore Updater hlídá a instaluje aktualizace programu **GeoStore V6** a jeho aplikačních řešení (V6-DTMČR, V6-IG, V6-3D, DWG-DGN a další) přímo z portálu technické podpory [portal.geostore.cz](https://portal.geostore.cz).
 
 Místo ručního stahování balíčků z portálu stačí:
 

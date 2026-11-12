@@ -59,7 +59,7 @@ pub fn module_info(key: &str) -> ModuleInfo {
             3,
         ),
         "DWG" => (
-            "Rozšíření DWG-DGN".into(),
+            "DWG-DGN".into(),
             "Práce s výkresy DWG a DGN",
             "DWG".into(),
             vec!["GSv6Dwg.dll", "GSDwgCore.dll"],
