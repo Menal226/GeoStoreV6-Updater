@@ -443,6 +443,7 @@ impl Worker {
         let mut report = Report::default();
         self.wait_for_geostore()?;
         let mut hasp_pending = extras.hasp;
+        let mut hasp: Option<PathBuf> = None;
         let mut i = 0;
         while i < jobs.len() {
             let job = jobs[i].clone();
@@ -493,18 +494,11 @@ impl Worker {
                     report.lines.push(line);
                     report.warnings += warn;
                     if hasp_pending {
-                        if let Some(root) = installer::find_install_root(&dir) {
-                            if let Some(hasp) = installer::find_hasp(&root) {
-                                hasp_pending = false;
-                                self.progress(step, steps, &job.name, "Instalace ovladače HW klíče – dokončete prosím průvodce", None, "", false);
-                                self.em.log(Level::Info, format!("Spouštím instalaci ovladače HW klíče: {}", hasp.display()));
-                                match installer::run_interactive(&hasp) {
-                                    Ok(code) => self.em.log(Level::Info, format!("Instalátor ovladače HW klíče skončil s kódem {code}.")),
-                                    Err(e) => {
-                                        report.warnings += 1;
-                                        self.em.log(Level::Warn, friendly_error(&e));
-                                    }
-                                }
+                        if let Some(found) = installer::find_install_root(&dir).and_then(|r| installer::find_hasp(&r)) {
+                            hasp_pending = false;
+                            match stash_hasp(&found) {
+                                Some(exe) => hasp = Some(exe),
+                                None => self.run_hasp(&found, step, steps, &mut report),
                             }
                         }
                     }
@@ -549,7 +543,23 @@ impl Worker {
                 }
             }
         }
+        if let Some(exe) = hasp {
+            let steps = jobs.len().max(1);
+            self.run_hasp(&exe, steps, steps, &mut report);
+        }
         Ok(report)
+    }
+
+    fn run_hasp(&self, exe: &Path, step: usize, steps: usize, report: &mut Report) {
+        self.progress(step, steps, "Ovladač HW klíče", "Instalace ovladače HW klíče – dokončete prosím průvodce", None, "", false);
+        self.em.log(Level::Info, format!("Spouštím instalaci ovladače HW klíče: {}", exe.display()));
+        match installer::run_interactive(exe) {
+            Ok(code) => self.em.log(Level::Info, format!("Instalátor ovladače HW klíče skončil s kódem {code}.")),
+            Err(e) => {
+                report.warnings += 1;
+                self.em.log(Level::Warn, friendly_error(&e));
+            }
+        }
     }
 
     fn licman(&self) -> Result<Portal> {
@@ -868,6 +878,13 @@ fn sort_jobs(jobs: &mut [Job]) {
         let eb = matches!(b.kind, JobKind::Editor { .. });
         eb.cmp(&ea).then(a.file.date.cmp(&b.file.date)).then(a.key.cmp(&b.key))
     });
+}
+
+fn stash_hasp(exe: &Path) -> Option<PathBuf> {
+    let dest = paths::extract_dir().join("_hasp");
+    installer::remove_dir(&dest);
+    std::fs::rename(exe.parent()?, &dest).ok()?;
+    Some(dest.join(exe.file_name()?))
 }
 
 fn sanitize(name: &str) -> String {
