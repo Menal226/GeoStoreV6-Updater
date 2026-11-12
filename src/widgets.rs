@@ -26,7 +26,6 @@ pub mod icon {
     pub const PLAY: char = '\u{E768}';
     pub const DELETE: char = '\u{E74D}';
     pub const LINK: char = '\u{E71B}';
-    pub const SIGN_OUT: char = '\u{F3B1}';
 }
 
 pub fn icon_text(c: char, size: f32, color: Color32) -> RichText {

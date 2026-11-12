@@ -857,7 +857,7 @@ impl App {
             .exact_width(240.0)
             .resizable(false)
             .show_separator_line(true)
-            .frame(Frame::new().fill(SIDEBAR).inner_margin(Margin { left: 12, right: 12, top: 20, bottom: 14 }))
+            .frame(Frame::new().fill(SIDEBAR).inner_margin(Margin { left: 12, right: 12, top: 20, bottom: 16 }))
             .show(ctx, |ui| {
                 ui.add_space(4.0);
                 ui.spacing_mut().item_spacing.y = 2.0;
@@ -882,13 +882,14 @@ impl App {
                     row.add(egui::Label::new(RichText::new(&self.user).size(14.0).color(TEXT)).truncate());
                     row.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.add_space(14.0);
-                        let resp = widgets::button_ex(ui, Some(icon::SIGN_OUT), "Odhlásit", Btn::Secondary, !busy, 0.0, 28.0)
+                        let resp = ui
+                            .add_enabled(!busy, egui::Button::new(RichText::new("Odhlásit").size(13.0).color(MUTED)).frame(false))
                             .on_hover_cursor(egui::CursorIcon::PointingHand);
                         if resp.clicked() {
                             self.actions.push(Action::Ask(Confirm::Logout));
                         }
                     });
-                    ui.add_space(10.0);
+                    ui.add_space(8.0);
                     ui.separator();
                 });
             });
