@@ -23,6 +23,7 @@ Místo ručního stahování balíčků z portálu stačí:
 11. [Kde aplikace ukládá data](#kde-aplikace-ukládá-data)
 12. [Odinstalace](#odinstalace)
 13. [Řešení problémů](#řešení-problémů)
+14. [Kontakt](#kontakt)
 
 ## Požadavky
 
@@ -220,3 +221,6 @@ V nabídce **⋯** u balíčku zvolte **Označit jako aktuální**.
 
 **Kde najdu podrobnosti o tom, co se při instalaci stalo?**
 Na stránce **Historie → Protokoly → Celý protokol aplikace**.
+
+## Kontakt
+V případě potřeby je možno mně kontaktovat [zde](mailto:gsupdater@menal.net)
