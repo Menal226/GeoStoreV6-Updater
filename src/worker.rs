@@ -50,6 +50,8 @@ pub enum Cmd {
     CleanInstall { plan: CleanPlan, opts: InstallOptions },
     MarkCurrent(String),
     Licences,
+    LicmanLogin { user: String, pass: String },
+    LicmanReset,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -92,7 +94,8 @@ pub enum Event {
     WaitingForGeoStore(bool),
     Log(LogLine),
     OpFinished { outcome: Outcome, summary: String },
-    Licences(Result<Vec<Licence>, String>),
+    /// `account` is the separate licence-server account in use, None when the portal account is used.
+    Licences { result: Result<Vec<Licence>, String>, account: Option<String> },
 }
 
 #[derive(Clone)]
@@ -246,6 +249,7 @@ impl Worker {
                 self.portal = None;
                 self.files.clear();
                 crate::creds::delete();
+                crate::creds::delete_licman();
                 self.em.log(Level::Info, t!("worker.logged_out"));
                 self.em.send(Event::LoggedOut);
             }
@@ -259,12 +263,30 @@ impl Worker {
                 let extras = Extras { hasp: plan.hasp, vcredist: plan.vcredist, licence: plan.licence.clone() };
                 self.run_operation(false, jobs, opts, extras);
             }
-            Cmd::Licences => {
-                let result = self.licman().and_then(|mut l| l.list_licences());
-                if let Err(e) = &result {
-                    self.em.log(Level::Warn, t!("worker.licences_failed", error = friendly_error(e)));
+            Cmd::Licences => self.send_licences(),
+            Cmd::LicmanLogin { user, pass } => {
+                let result = Portal::licman().and_then(|mut l| {
+                    l.login(&user, &pass).context(t!("worker.licman_login_failed_account", user = user))?;
+                    l.list_licences()
+                });
+                match result {
+                    Ok(list) => {
+                        if let Err(e) = crate::creds::save_licman(&user, &pass) {
+                            self.em.log(Level::Warn, t!("worker.licman_save_failed", error = e));
+                        }
+                        self.em.log(Level::Info, t!("worker.licman_account", user = user));
+                        self.em.send(Event::Licences { result: Ok(list), account: Some(user) });
+                    }
+                    Err(e) => {
+                        self.em.log(Level::Warn, t!("worker.licences_failed", error = friendly_error(&e)));
+                        let account = crate::creds::load_licman().map(|(u, _)| u);
+                        self.em.send(Event::Licences { result: Err(friendly_error(&e)), account });
+                    }
                 }
-                self.em.send(Event::Licences(result.map_err(|e| friendly_error(&e))));
+            }
+            Cmd::LicmanReset => {
+                crate::creds::delete_licman();
+                self.send_licences();
             }
             Cmd::MarkCurrent(key) => {
                 if let Some(row) = self.rows().into_iter().find(|r| r.key == key) {
@@ -581,7 +603,22 @@ impl Worker {
         }
     }
 
+    fn send_licences(&self) {
+        let account = crate::creds::load_licman().map(|(u, _)| u);
+        let result = self.licman().and_then(|mut l| l.list_licences());
+        if let Err(e) = &result {
+            self.em.log(Level::Warn, t!("worker.licences_failed", error = friendly_error(e)));
+        }
+        self.em.send(Event::Licences { result: result.map_err(|e| friendly_error(&e)), account });
+    }
+
+    /// Signs in to the licence server with its own saved account if there is one, otherwise with the portal account.
     fn licman(&self) -> Result<Portal> {
+        if let Some((user, pass)) = crate::creds::load_licman() {
+            let mut licman = Portal::licman()?;
+            licman.login(&user, &pass).context(t!("worker.licman_login_failed_account", user = user))?;
+            return Ok(licman);
+        }
         let (user, pass) = self
             .portal
             .as_ref()

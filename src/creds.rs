@@ -6,9 +6,39 @@ use windows::Win32::Security::Credentials::{
 };
 
 const TARGET: &str = "GeoStoreUpdater/portal.geostore.cz";
+const LICMAN_TARGET: &str = "GeoStoreUpdater/licman";
 
 pub fn save(user: &str, pass: &str) -> anyhow::Result<()> {
-    let target = wide(TARGET);
+    save_to(TARGET, user, pass)
+}
+
+pub fn load() -> Option<(String, String)> {
+    load_from(TARGET)
+}
+
+pub fn exists() -> bool {
+    load().is_some()
+}
+
+pub fn delete() {
+    delete_target(TARGET);
+}
+
+/// A separate account for the licence server, used instead of the portal one when set.
+pub fn save_licman(user: &str, pass: &str) -> anyhow::Result<()> {
+    save_to(LICMAN_TARGET, user, pass)
+}
+
+pub fn load_licman() -> Option<(String, String)> {
+    load_from(LICMAN_TARGET)
+}
+
+pub fn delete_licman() {
+    delete_target(LICMAN_TARGET);
+}
+
+fn save_to(target: &str, user: &str, pass: &str) -> anyhow::Result<()> {
+    let target = wide(target);
     let mut username = wide(user);
     let blob: Vec<u8> = pass.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
     let cred = CREDENTIALW {
@@ -24,8 +54,8 @@ pub fn save(user: &str, pass: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn load() -> Option<(String, String)> {
-    let target = wide(TARGET);
+fn load_from(target: &str) -> Option<(String, String)> {
+    let target = wide(target);
     let mut ptr: *mut CREDENTIALW = std::ptr::null_mut();
     unsafe {
         CredReadW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, 0, &mut ptr).ok()?;
@@ -46,12 +76,8 @@ pub fn load() -> Option<(String, String)> {
     }
 }
 
-pub fn exists() -> bool {
-    load().is_some()
-}
-
-pub fn delete() {
-    let target = wide(TARGET);
+fn delete_target(target: &str) {
+    let target = wide(target);
     unsafe {
         let _ = CredDeleteW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, 0);
     }

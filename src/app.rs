@@ -135,6 +135,8 @@ pub enum Action {
     DismissResult,
     ForgetCreds,
     SaveCreds,
+    LicmanLogin,
+    LicmanReset,
     Uninstall,
 }
 
@@ -163,6 +165,8 @@ pub struct App {
     pub last_auto_check: Option<DateTime<Local>>,
     pub wizard: WizardState,
     pub licences: Licences,
+    pub licman_account: Option<String>,
+    pub licman_login: Option<(String, String)>,
     pub confirm: Option<Confirm>,
     pub actions: Vec<Action>,
     pub task_error: Option<String>,
@@ -226,6 +230,8 @@ impl App {
             last_auto_check: State::load().last_auto_check,
             wizard: WizardState::default(),
             licences: Licences::Idle,
+            licman_account: None,
+            licman_login: None,
             confirm: None,
             actions: Vec::new(),
             task_error,
@@ -485,7 +491,8 @@ impl App {
                         self.log.drain(..excess);
                     }
                 }
-                Event::Licences(result) => {
+                Event::Licences { result, account } => {
+                    self.licman_account = account;
                     self.licences = match result {
                         Ok(mut list) => {
                             if cfg!(debug_assertions) {
@@ -632,6 +639,11 @@ impl App {
                     self.creds_stored = false;
                 }
                 Action::SaveCreds => self.save_creds = Some(String::new()),
+                Action::LicmanLogin => self.licman_login = Some((self.licman_account.clone().unwrap_or_default(), String::new())),
+                Action::LicmanReset => {
+                    self.licences = Licences::Loading;
+                    self.send(Cmd::LicmanReset);
+                }
                 Action::Uninstall => self.uninstall(),
             }
         }
@@ -645,6 +657,7 @@ impl App {
             return;
         }
         creds::delete();
+        creds::delete_licman();
         if let Some(exe) = crate::selfupdate::app_exe() {
             let mut dirs = vec![paths::data_dir()];
             if let Some(parent) = exe.parent().filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().contains("geostore updater"))) {
@@ -860,6 +873,50 @@ impl App {
         }
     }
 
+    fn ui_licman_login(&mut self, ctx: &egui::Context) {
+        let Some((user, pass)) = self.licman_login.as_mut() else { return };
+        let mut ok = false;
+        let mut close = false;
+        let modal = egui::Modal::new(egui::Id::new("licman_login")).frame(Self::modal_frame()).show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.label(RichText::new(t!("app.licman_title")).size(20.0).color(TEXT));
+            ui.add_space(16.0);
+            ui.label(RichText::new(t!("app.username")).size(13.0).color(MUTED));
+            ui.add_space(6.0);
+            let user_field = ui.add(egui::TextEdit::singleline(user).desired_width(f32::INFINITY).margin(egui::vec2(12.0, 8.0)));
+            ui.add_space(12.0);
+            ui.label(RichText::new(t!("app.password")).size(13.0).color(MUTED));
+            ui.add_space(6.0);
+            let pass_field = ui.add(egui::TextEdit::singleline(pass).password(true).desired_width(f32::INFINITY).margin(egui::vec2(12.0, 8.0)));
+            if !user_field.has_focus() && !pass_field.has_focus() {
+                if user.is_empty() { user_field.request_focus() } else { pass_field.request_focus() }
+            }
+            ui.add_space(24.0);
+            let filled = !user.trim().is_empty() && !pass.is_empty();
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                if widgets::button_sized(ui, None, t!("app.cancel"), Btn::Secondary, true, 96.0).clicked() {
+                    close = true;
+                }
+                if widgets::button_sized(ui, None, t!("app.sign_in"), Btn::Primary, filled, 96.0).clicked() {
+                    ok = true;
+                }
+            });
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) && filled {
+                ok = true;
+            }
+        });
+        if ok {
+            if let Some((user, pass)) = self.licman_login.take() {
+                self.licences = Licences::Loading;
+                self.send(Cmd::LicmanLogin { user: user.trim().to_string(), pass });
+            }
+        } else if close || modal.should_close() {
+            self.licman_login = None;
+        }
+    }
+
     fn ui_sidebar(&mut self, ctx: &egui::Context) {
         let pending = self
             .pending_keys()
@@ -1060,6 +1117,7 @@ impl eframe::App for App {
                 });
             self.ui_confirm(ctx);
             self.ui_save_creds(ctx);
+            self.ui_licman_login(ctx);
         }
         self.resume_pending();
         self.apply_actions();

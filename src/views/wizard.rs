@@ -83,9 +83,18 @@ impl App {
                 let e = e.clone();
                 ui.add(egui::Label::new(RichText::new(t!("wizard.licences_failed_detail", error = e)).size(13.0).color(WARN)).wrap());
                 ui.add_space(8.0);
-                if widgets::button(ui, Some(icon::REFRESH), t!("wizard.retry"), Btn::Secondary, true).clicked() {
-                    self.licences = Licences::Idle;
-                }
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if widgets::button(ui, Some(icon::REFRESH), t!("wizard.retry"), Btn::Secondary, true).clicked() {
+                        self.licences = Licences::Idle;
+                    }
+                    if widgets::button(ui, Some(icon::USER), t!("wizard.licman_other_account"), Btn::Secondary, true).clicked() {
+                        self.actions.push(Action::LicmanLogin);
+                    }
+                    if self.licman_account.is_some() && widgets::button(ui, None, t!("wizard.licman_use_portal"), Btn::Secondary, true).clicked() {
+                        self.actions.push(Action::LicmanReset);
+                    }
+                });
             }
             Licences::Ready(list) if list.is_empty() => {
                 ui.label(RichText::new(t!("wizard.no_licences")).size(13.0).color(WARN));
@@ -110,6 +119,39 @@ impl App {
                 }
             }
         }
+    }
+
+    fn ui_licman_account(&mut self, ui: &mut egui::Ui, enabled: bool) {
+        if !matches!(self.licences, Licences::Ready(_)) {
+            return;
+        }
+        let link = |ui: &mut egui::Ui, text: &str| {
+            ui.add_enabled(enabled, egui::Button::new(RichText::new(text).size(13.0).color(if enabled { ACCENT } else { DISABLED_TEXT })).frame(false))
+                .on_hover_cursor(egui::CursorIcon::PointingHand)
+                .clicked()
+        };
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 12.0;
+            let color = if enabled { MUTED } else { DISABLED_TEXT };
+            match self.licman_account.clone() {
+                Some(user) => {
+                    ui.label(RichText::new(t!("wizard.licman_account", user = user)).size(13.0).color(color));
+                    if link(ui, t!("wizard.licman_change")) {
+                        self.actions.push(Action::LicmanLogin);
+                    }
+                    if link(ui, t!("wizard.licman_use_portal")) {
+                        self.actions.push(Action::LicmanReset);
+                    }
+                }
+                None => {
+                    ui.label(RichText::new(t!("wizard.licman_account", user = self.user)).size(13.0).color(color));
+                    if link(ui, t!("wizard.licman_other_account")) {
+                        self.actions.push(Action::LicmanLogin);
+                    }
+                }
+            }
+        });
     }
 
     fn licence_possible(&self) -> bool {
@@ -301,6 +343,7 @@ impl App {
                     ui.add_space(8.0);
                     let choice_enabled = lic_enabled && self.wizard.licence;
                     self.ui_licence_choice(ui, choice_enabled);
+                    self.ui_licman_account(ui, enabled && (choice_enabled || self.no_licences()));
                 });
             }
         });
