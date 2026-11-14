@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "geostore-updater"
-version = "1.0.5"
+version = "1.0.6"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
