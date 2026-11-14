@@ -9,7 +9,7 @@ use eframe::egui::{self, Align, CornerRadius, Frame, Layout, Margin, RichText, S
 
 const INTERVALS: [u32; 6] = [1, 2, 4, 8, 12, 24];
 const VALUE_COL: f32 = 200.0;
-const REPO_URL: &str = "https://github.com/Menal226/GeoStoreV6-Updater";
+pub(super) const REPO_URL: &str = "https://github.com/Menal226/GeoStoreV6-Updater";
 
 fn interval_label(h: u32) -> String {
     match h {

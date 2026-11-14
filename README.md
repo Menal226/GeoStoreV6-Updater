@@ -111,7 +111,7 @@ Stránka **Nová instalace** slouží k instalaci GeoStore V6 na nový počíta�
 1. **Grafický editor** – GeoStore V6. Pokud je již nainstalovaný, při výběru se odinstaluje a nainstaluje znovu.
 2. **Aplikační řešení** – vyberte řešení, která chcete nainstalovat (**Vybrat vše** označí všechna). Instaluje se kompletní instalace řešení.
 3. **Doplňky**
-   - **Nainstalovat ovladač hardwarového klíče (Sentinel HASP)** – spustí průvodce instalací ovladače, který je potřeba dokončit ručně.
+   - **Nainstalovat ovladač hardwarového klíče (Sentinel HASP)** – na konci instalace spustí průvodce instalací ovladače, který je potřeba dokončit ručně.
    - **Doinstalovat Microsoft Visual C++ 2010 a 2012 (x64)** – knihovny potřebné pro GeoStore V6. Dostupné jen při instalaci editoru.
    - **Stáhnout plovoucí licenci (gsfl.lic)** – stáhne licenční soubor ze systému licman (používá stejné přihlašovací údaje) a uloží jej do složky GeoStore V6. Pokud má váš účet více licencí, vyberete, kterou chcete použít.
 

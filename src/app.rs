@@ -30,6 +30,7 @@ pub enum View {
     Wizard,
     History,
     Settings,
+    Help,
 }
 
 #[derive(Default)]
@@ -264,7 +265,7 @@ impl App {
         }
     }
 
-    /// Debug-only screenshot aid. GSU_PREVIEW is a comma list: admin (install controls on), op (sample progress card), confirm (open the update dialog), licences (two extra fake licences), anon (sample user and company names), login (stay on the sign-in screen), view=wizard|history|settings.
+    /// Debug-only screenshot aid. GSU_PREVIEW is a comma list: admin (install controls on), op (sample progress card), confirm (open the update dialog), licences (two extra fake licences), anon (sample user and company names), login (stay on the sign-in screen), view=wizard|history|settings|help.
     fn apply_preview(&mut self) {
         let Ok(mode) = std::env::var("GSU_PREVIEW") else { return };
         self.elevated = true;
@@ -280,6 +281,7 @@ impl App {
                 Some("wizard") => self.view = View::Wizard,
                 Some("history") => self.view = View::History,
                 Some("settings") => self.view = View::Settings,
+                Some("help") => self.view = View::Help,
                 _ => {}
             }
         }
@@ -866,6 +868,7 @@ impl App {
                     (View::Wizard, icon::PACKAGE, "Nová instalace", 0),
                     (View::History, icon::HISTORY, "Historie", 0),
                     (View::Settings, icon::SETTINGS, "Nastavení", 0),
+                    (View::Help, icon::HELP, "Nápověda", 0),
                 ];
                 for (view, ic, label, count) in items {
                     if widgets::nav_item(ui, ic, label, self.view == view, count).clicked() {
@@ -1044,6 +1047,7 @@ impl eframe::App for App {
                     View::Wizard => self.ui_wizard(ui),
                     View::History => self.ui_history(ui),
                     View::Settings => self.ui_settings(ui),
+                    View::Help => self.ui_help(ui),
                 });
             self.ui_confirm(ctx);
             self.ui_save_creds(ctx);
