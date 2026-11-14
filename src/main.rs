@@ -39,6 +39,30 @@ fn acquire_instance_lock() -> std::io::Result<File> {
 
 const ERROR_ACCESS_DENIED: i32 = 5;
 
+/// Run by the setup's uninstaller before it deletes the program files.
+fn uninstall_cleanup() {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_CLOSE};
+    daemon::stop();
+    let title = local::wide(WINDOW_TITLE);
+    unsafe {
+        if let Ok(hwnd) = FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) {
+            let _ = PostMessageW(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+    }
+    for _ in 0..50 {
+        if acquire_instance_lock().is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let _ = scheduler::uninstall();
+    creds::delete();
+    creds::delete_licman();
+    let _ = std::fs::remove_dir_all(paths::data_dir());
+}
+
 fn focus_existing() {
     use windows::core::PCWSTR;
     use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE};
@@ -69,6 +93,10 @@ fn main() -> eframe::Result<()> {
     let relaunch = flag("--relaunch");
     if flag("--daemon") || flag("--background") {
         daemon::run(relaunch);
+        return Ok(());
+    }
+    if flag("--uninstall") {
+        uninstall_cleanup();
         return Ok(());
     }
 

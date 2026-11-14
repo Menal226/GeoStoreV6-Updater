@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  STORE_REPO: Menal226/GeoStoreV6-Updater-Store
+
 jobs:
   release:
     runs-on: windows-latest
@@ -28,10 +31,35 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build release
-        run: cargo build --release --locked
+        shell: pwsh
+        run: |
+          cargo build --release --locked
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/GeoStoreUpdater.exe dist/GeoStoreUpdater.exe
+
+      - name: Build installer without self-update
+        shell: pwsh
+        run: |
+          cargo build --release --locked --no-default-features
+          $inno = "$env:RUNNER_TEMP\inno"
+          Invoke-WebRequest https://github.com/jrsoftware/issrc/releases/download/is-7_1_1/innosetup-7.1.1-x64.exe -OutFile "$env:RUNNER_TEMP\innosetup.exe"
+          Start-Process "$env:RUNNER_TEMP\innosetup.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/PORTABLE=1", "/CURRENTUSER", "/NOICONS", "/DIR=`"$inno`"" -Wait
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          & "$inno\ISCC.exe" "/DAppVersion=$version" "/DSourceExe=$PWD\target\release\GeoStoreUpdater.exe" installer\GeoStoreV6Updater.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/GeoStoreUpdater.exe
+          files: dist/GeoStoreUpdater.exe
           generate_release_notes: true
+
+      - name: Publish installer to the Store repository
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ env.STORE_REPO }}
+          token: ${{ secrets.STORE_RELEASE_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: Installer for the Microsoft Store listing, built from ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+          files: target/installer/GeoStoreV6-Updater-Setup.exe

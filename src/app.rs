@@ -650,6 +650,14 @@ impl App {
     }
 
     fn uninstall(&mut self) {
+        // Installed through the setup, its own uninstaller removes the files and the Apps & features entry.
+        let setup_uninstaller = crate::selfupdate::app_exe().and_then(|exe| exe.parent().map(|dir| dir.join("unins000.exe"))).filter(|p| p.exists());
+        if let Some(unins) = setup_uninstaller {
+            if std::process::Command::new(unins).arg("/SILENT").spawn().is_ok() {
+                self.close_requested = true;
+                return;
+            }
+        }
         daemon::stop();
         if let Err(e) = scheduler::uninstall() {
             self.view = View::Dashboard;
