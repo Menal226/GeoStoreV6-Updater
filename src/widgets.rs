@@ -1,3 +1,5 @@
+use crate::i18n::Lang;
+use crate::t;
 use crate::theme::{self, *};
 use eframe::egui::{
     self, text::LayoutJob, Align, Color32, CornerRadius, CursorIcon, FontFamily, FontId, Frame,
@@ -203,6 +205,28 @@ pub fn radio(ui: &mut Ui, selected: bool, title: &str, detail: &str, enabled: bo
     } else {
         resp
     }
+}
+
+pub fn language_picker(ui: &mut Ui, current: Lang) -> Option<Lang> {
+    let mut picked = None;
+    ui.scope(|ui| {
+        ui.spacing_mut().interact_size.y = 32.0;
+        ui.spacing_mut().button_padding = egui::vec2(12.0, 6.0);
+        egui::ComboBox::from_id_salt("language")
+            .width(120.0)
+            .icon(chevron)
+            .selected_text(current.name())
+            .show_ui(ui, |ui| {
+                for lang in Lang::ALL {
+                    if ui.selectable_label(lang == current, lang.name()).clicked() && lang != current {
+                        picked = Some(lang);
+                    }
+                }
+            })
+            .response
+            .on_hover_text(t!("lang.label"));
+    });
+    picked
 }
 
 /// ComboBox icon: a small chevron instead of egui's filled triangle.
@@ -626,7 +650,7 @@ pub fn nav_item(ui: &mut Ui, ic: char, label: &str, active: bool, count: usize) 
 
 /// A 32px "⋯" button that opens a popup menu below it.
 pub fn more_menu(ui: &mut Ui, id_salt: impl std::hash::Hash, add: impl FnOnce(&mut Ui)) {
-    let resp = button(ui, Some(icon::MORE), "", Btn::Ghost, true).on_hover_text("Další akce");
+    let resp = button(ui, Some(icon::MORE), "", Btn::Ghost, true).on_hover_text(t!("widgets.more_actions"));
     attach_menu(ui, id_salt, resp, add);
 }
 

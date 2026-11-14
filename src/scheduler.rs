@@ -1,4 +1,4 @@
-use crate::paths;
+use crate::{paths, t};
 use anyhow::{bail, Context, Result};
 use std::os::windows::process::CommandExt;
 use std::process::Command;
@@ -21,17 +21,17 @@ fn schtasks(args: &[&str]) -> std::io::Result<std::process::Output> {
 }
 
 pub fn install() -> Result<()> {
-    let exe = crate::selfupdate::app_exe().context("Nelze zjistit cestu k programu")?;
+    let exe = crate::selfupdate::app_exe().context(t!("scheduler.no_exe_path"))?;
     let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
         (Ok(d), Ok(u)) => format!("{d}\\{u}"),
         (_, Ok(u)) => u,
-        _ => bail!("Nelze zjistit přihlášeného uživatele"),
+        _ => bail!(t!("scheduler.no_user")),
     };
     let xml = format!(
         r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Kontrola a instalace aktualizací GeoStore V6</Description>
+    <Description>{description}</Description>
   </RegistrationInfo>
   <Triggers>
     <LogonTrigger>
@@ -64,6 +64,7 @@ pub fn install() -> Result<()> {
   </Actions>
 </Task>
 "#,
+        description = xml_escape(t!("scheduler.description")),
         user = xml_escape(&user),
         exe = xml_escape(&exe.to_string_lossy()),
     );
@@ -73,23 +74,23 @@ pub fn install() -> Result<()> {
     std::fs::write(&path, bytes)?;
     let path_str = path.to_string_lossy().to_string();
     let out = schtasks(&["/Create", "/TN", TASK_NAME, "/XML", &path_str, "/F"])
-        .context("Nelze spustit schtasks.exe")?;
+        .context(t!("scheduler.schtasks_failed"))?;
     let _ = std::fs::remove_file(&path);
     if !out.status.success() {
         let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        bail!("Naplánovanou úlohu se nepodařilo vytvořit. {msg}");
+        bail!(t!("scheduler.create_failed", details = msg));
     }
     Ok(())
 }
 
 pub fn uninstall() -> Result<()> {
-    let query = schtasks(&["/Query", "/TN", TASK_NAME]).context("Nelze spustit schtasks.exe")?;
+    let query = schtasks(&["/Query", "/TN", TASK_NAME]).context(t!("scheduler.schtasks_failed"))?;
     if !query.status.success() {
         return Ok(());
     }
-    let out = schtasks(&["/Delete", "/TN", TASK_NAME, "/F"]).context("Nelze spustit schtasks.exe")?;
+    let out = schtasks(&["/Delete", "/TN", TASK_NAME, "/F"]).context(t!("scheduler.schtasks_failed"))?;
     if !out.status.success() {
-        bail!("Naplánovanou úlohu „{TASK_NAME}“ se nepodařilo odstranit.");
+        bail!(t!("scheduler.delete_failed", name = TASK_NAME));
     }
     Ok(())
 }

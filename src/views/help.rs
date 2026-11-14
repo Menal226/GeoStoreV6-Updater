@@ -1,5 +1,7 @@
 use crate::app::App;
+use crate::i18n;
 use crate::local;
+use crate::t;
 use crate::theme::{self, *};
 use crate::widgets::{self, icon, Btn};
 use eframe::egui::{self, text::LayoutJob, Align, FontId, Layout, RichText, TextFormat};
@@ -19,97 +21,97 @@ use Block::*;
 
 const SECTIONS: &[(&str, &[Block])] = &[
     (
-        "Přehled balíčků",
+        "help.overview.title",
         &[
-            P("Stránka **Přehled** ukazuje všechny sledované balíčky:"),
-            Li("**Nainstalováno** – datum vydání nainstalované verze a číslo verze v počítači"),
-            Li("**Na portálu** – datum nejnovějšího balíčku na portálu, modře, pokud je novější než nainstalovaný"),
-            Li("**Stav** – **Aktuální**, **Nová verze** nebo **Nenainstalováno**"),
-            P("Tlačítko **Zkontrolovat** ihned zkontroluje portál. Pod seznamem je čas další automatické kontroly. Balíčky, které máte na portálu k dispozici, ale nesledujete je, jsou v části **Další balíčky dostupné pro váš účet** a tlačítkem **Nainstalovat** je můžete doinstalovat."),
-            P("Nabídka **Další akce** na konci každého řádku nabízí:"),
-            Li("**Přeinstalovat** – znovu nainstaluje aktuální verzi balíčku"),
-            Li("**Označit jako aktuální** – pokud jste balíček aktualizovali ručně, aplikace jej přestane hlásit jako zastaralý"),
-            Li("**Přestat sledovat** / **Sledovat aktualizace** – určuje, zda aplikace u balíčku hlídá aktualizace"),
-            P("Dokud aplikace balíček sama nenainstaluje, odhaduje jeho stav podle data souborů v počítači. Po první instalaci přes GeoStore Updater je stav přesný."),
+            P("help.overview.p1"),
+            Li("help.overview.li1"),
+            Li("help.overview.li2"),
+            Li("help.overview.li3"),
+            P("help.overview.p2"),
+            P("help.overview.p3"),
+            Li("help.overview.li4"),
+            Li("help.overview.li5"),
+            Li("help.overview.li6"),
+            P("help.overview.p4"),
         ],
     ),
     (
-        "Instalace aktualizací",
+        "help.updates.title",
         &[
-            P("Klikněte na **Aktualizovat vše** vpravo nahoře, nebo na **Aktualizovat** u jednoho balíčku. Aplikace ukáže, co se změní, a po potvrzení balíčky postupně stáhne a nainstaluje. Průběh vidíte nahoře na stránce Přehled."),
-            Li("**GeoStore V6 musí být zavřený.** Pokud je spuštěný, instalace počká a sama pokračuje, jakmile jej zavřete."),
-            Li("Tlačítkem **Přerušit instalaci** instalaci zastavíte. Některé kroky, například kopírování souborů, přerušit nelze."),
-            Li("Upravené konfigurační soubory v C:\\V6-KONFIG se před přepsáním zálohují do C:\\V6-KONFIG_zalohy."),
-            Li("Po aktualizaci editoru GeoStore V6 aplikace znovu nainstaluje sledovaná aplikační řešení, aby jejich knihovny zůstaly v pořádku."),
+            P("help.updates.p1"),
+            Li("help.updates.li1"),
+            Li("help.updates.li2"),
+            Li("help.updates.li3"),
+            Li("help.updates.li4"),
         ],
     ),
     (
-        "Nová instalace",
+        "help.new_install.title",
         &[
-            P("Stránka **Nová instalace** slouží k instalaci GeoStore V6 na nový počítač nebo k úplné přeinstalaci vybraných částí. Výběr potvrďte tlačítkem **Spustit instalaci**."),
-            Li("**Grafický editor** – GeoStore V6. Pokud je již nainstalovaný, odinstaluje se a nainstaluje znovu."),
-            Li("**Aplikační řešení** – nainstaluje se kompletní instalace vybraných řešení."),
-            Li("**Ovladač hardwarového klíče (Sentinel HASP)** – na konci instalace se spustí průvodce instalací ovladače, který je potřeba dokončit ručně."),
-            Li("**Microsoft Visual C++ 2010 a 2012 (x64)** – knihovny potřebné pro GeoStore V6, dostupné jen při instalaci editoru."),
-            Li("**Plovoucí licence (gsfl.lic)** – stáhne licenční soubor ze systému licman a uloží jej do složky GeoStore V6. Pokud má váš účet více licencí, vyberete, kterou chcete použít."),
-            P("**Pozor:** kompletní instalace aplikačního řešení přepíše konfigurační soubory v C:\\V6-KONFIG a nastavení prostředí v %LOCALAPPDATA%\\GEOVAP\\GSV6. Upravené konfigurační soubory se před přepsáním zálohují."),
+            P("help.new_install.p1"),
+            Li("help.new_install.li1"),
+            Li("help.new_install.li2"),
+            Li("help.new_install.li3"),
+            Li("help.new_install.li4"),
+            Li("help.new_install.li5"),
+            P("help.new_install.p2"),
         ],
     ),
     (
-        "Historie",
+        "help.history.title",
         &[
-            P("Stránka **Historie** ukazuje kontroly, instalace a jejich výsledky, seskupené podle dnů. Běžné opakované záznamy jsou skryté, zobrazíte je odkazem **Zobrazit**. Nabídka **Protokoly** otevře:"),
-            Li("**Celý protokol aplikace** – podrobný záznam všech operací"),
-            Li("**Protokol instalátoru** – výstup instalačních dávek balíčků (davka.log)"),
-            Li("**Otevřít složku záloh** – zálohy konfiguračních souborů z C:\\V6-KONFIG"),
+            P("help.history.p1"),
+            Li("help.history.li1"),
+            Li("help.history.li2"),
+            Li("help.history.li3"),
         ],
     ),
     (
-        "Nastavení",
+        "help.settings.title",
         &[
-            Li("**Automaticky kontrolovat dostupnost aktualizací** – kontrola na pozadí buď pravidelně (každou hodinu až každých 24 hodin), nebo jednou denně v zadaný čas. Pokud byl počítač v tu dobu vypnutý, kontrola proběhne hned po jeho zapnutí."),
-            Li("**Nalezené aktualizace instalovat automaticky** – aktualizace se nainstalují na pozadí a po dokončení se zobrazí oznámení. Jinak je aplikace jen oznámí."),
-            Li("**Zálohovat upravené soubory** – před přepsáním zálohuje upravené soubory v C:\\V6-KONFIG. Doporučujeme nechat zapnuté."),
-            Li("**Ponechat stažené instalační balíčky** – stažené balíčky se po instalaci nesmažou. Zabírají stovky MB."),
-            Li("**Sledované balíčky** – zaškrtnuté balíčky aplikace hlídá a aktualizuje."),
-            Li("**Účet** – přihlášení uložené ve Správci pověření Windows. Bez něj nefunguje automatická kontrola na pozadí."),
+            Li("help.settings.li1"),
+            Li("help.settings.li2"),
+            Li("help.settings.li3"),
+            Li("help.settings.li4"),
+            Li("help.settings.li5"),
+            Li("help.settings.li6"),
         ],
     ),
     (
-        "Běh na pozadí a oznámení",
+        "help.background.title",
         &[
-            P("GeoStore Updater běží na pozadí i po zavření okna. Ikonu najdete v oznamovací oblasti vpravo dole na hlavním panelu, případně pod šipkou."),
-            Li("**Kliknutím na ikonu** otevřete okno aplikace."),
-            Li("**Pravým tlačítkem** otevřete nabídku s volbami **Otevřít GeoStore Updater**, **Zkontrolovat aktualizace** a **Ukončit**. Ukončení vypne běh na pozadí do příštího přihlášení do Windows nebo do dalšího otevření aplikace."),
-            Li("Najetím myší na ikonu uvidíte čas další kontroly."),
-            P("Když aplikace najde aktualizaci, zobrazí oznámení Windows. Pokud je zapnutá automatická instalace, oznámení přijde až po jejím dokončení. Běh na pozadí se spouští automaticky při každém přihlášení do Windows jako naplánovaná úloha „GeoStore Updater“."),
+            P("help.background.p1"),
+            Li("help.background.li1"),
+            Li("help.background.li2"),
+            Li("help.background.li3"),
+            P("help.background.p2"),
         ],
     ),
     (
-        "Kde aplikace ukládá data",
+        "help.data.title",
         &[
-            Row("Nastavení, stav balíčků, protokoly", "C:\\ProgramData\\GeoStore Updater"),
-            Row("Zálohy konfiguračních souborů", "C:\\V6-KONFIG_zalohy"),
-            Row("Správce pověření Windows", "GeoStoreUpdater/portal.geostore.cz"),
-            Row("Licenční soubor", "C:\\Program Files\\GEOVAP\\GeoStoreV6\\gsfl.lic"),
+            Row("help.data.settings", "C:\\ProgramData\\GeoStore Updater"),
+            Row("help.data.backups", "C:\\V6-KONFIG_zalohy"),
+            Row("help.data.credentials", "GeoStoreUpdater/portal.geostore.cz"),
+            Row("help.data.licence", "C:\\Program Files\\GEOVAP\\GeoStoreV6\\gsfl.lic"),
         ],
     ),
     (
-        "Odinstalace",
+        "help.uninstall.title",
         &[
-            P("V **Nastavení → O aplikaci** klikněte na **Odinstalovat aplikaci**. Aplikace ukončí běh na pozadí, zruší automatické spouštění, odebere uložené přihlášení a smaže svůj soubor i složku s nastavením a protokoly."),
-            P("GeoStore V6, nainstalovaná aplikační řešení a zálohy v C:\\V6-KONFIG_zalohy zůstanou beze změny."),
+            P("help.uninstall.p1"),
+            P("help.uninstall.p2"),
         ],
     ),
     (
-        "Řešení problémů",
+        "help.troubleshooting.title",
         &[
-            Q("Zobrazuje se „Kontrola aktualizací selhala“", "Zkontrolujte připojení k internetu a zda se přihlásíte na portal.geostore.cz v prohlížeči. Pokud jste měnili heslo, odhlaste se v aplikaci a přihlaste se znovu."),
-            Q("Instalace stojí na „Čekám na ukončení GeoStore V6“", "Uložte práci a zavřete všechna okna GeoStore V6. Instalace potom sama pokračuje."),
-            Q("Nechodí oznámení", "Zkontrolujte, že nemáte zapnutý režim **Nerušit** a že má aplikace povolená oznámení v **Nastavení Windows → Systém → Oznámení**. Ověřte také, že je ikona aplikace v oznamovací oblasti. Pokud ne, spusťte aplikaci a běh na pozadí se znovu zapne."),
-            Q("Automatická kontrola neprobíhá", "V **Nastavení** musí být zapnutá automatická kontrola a uložené přihlášení. Pokud jste aplikaci přesunuli do jiné složky, spusťte ji jednou z nového místa."),
-            Q("Balíček je hlášen jako zastaralý, i když jsem jej aktualizoval ručně", "V nabídce **Další akce** u balíčku zvolte **Označit jako aktuální**."),
-            Q("Kde najdu podrobnosti o tom, co se při instalaci stalo?", "Na stránce **Historie → Protokoly → Celý protokol aplikace**."),
+            Q("help.troubleshooting.q1", "help.troubleshooting.a1"),
+            Q("help.troubleshooting.q2", "help.troubleshooting.a2"),
+            Q("help.troubleshooting.q3", "help.troubleshooting.a3"),
+            Q("help.troubleshooting.q4", "help.troubleshooting.a4"),
+            Q("help.troubleshooting.q5", "help.troubleshooting.a5"),
+            Q("help.troubleshooting.q6", "help.troubleshooting.a6"),
         ],
     ),
 ];
@@ -142,12 +144,12 @@ fn paragraph(ui: &mut egui::Ui, text: &str) {
 
 fn block(ui: &mut egui::Ui, b: &Block) {
     match b {
-        P(text) => paragraph(ui, text),
-        Li(text) => {
+        P(key) => paragraph(ui, i18n::get(key)),
+        Li(key) => {
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 ui.add_sized([18.0, 20.0], egui::Label::new(RichText::new("•").size(14.0).color(SUBTLE)));
-                paragraph(ui, text);
+                paragraph(ui, i18n::get(key));
             });
         }
         Row(name, value) => {
@@ -155,15 +157,15 @@ fn block(ui: &mut egui::Ui, b: &Block) {
                 ui.set_min_height(24.0);
                 ui.allocate_ui_with_layout(egui::vec2(KEY_COL, 24.0), Layout::left_to_right(Align::Center), |ui| {
                     ui.set_width(KEY_COL);
-                    ui.label(RichText::new(*name).size(14.0).color(MUTED));
+                    ui.label(RichText::new(i18n::get(name)).size(14.0).color(MUTED));
                 });
                 ui.label(widgets::soft_mono_text(*value, 13.0, MONO_INK));
             });
         }
         Q(question, answer) => {
-            ui.label(widgets::semibold_text(*question, 14.0, TEXT));
+            ui.label(widgets::semibold_text(i18n::get(question), 14.0, TEXT));
             ui.add_space(2.0);
-            paragraph(ui, answer);
+            paragraph(ui, i18n::get(answer));
         }
     }
 }
@@ -178,8 +180,8 @@ fn gap(prev: &Block, next: &Block) -> f32 {
 
 impl App {
     pub(crate) fn ui_help(&mut self, ui: &mut egui::Ui) {
-        widgets::page_header(ui, "Nápověda", "", None, |ui| {
-            if widgets::button(ui, Some(icon::LINK), "Návod na GitHubu", Btn::Secondary, true).clicked() {
+        widgets::page_header(ui, t!("help.title"), "", None, |ui| {
+            if widgets::button(ui, Some(icon::LINK), t!("help.github_guide"), Btn::Secondary, true).clicked() {
                 local::open_url(&format!("{}#readme", super::settings::REPO_URL));
             }
         });
@@ -187,7 +189,7 @@ impl App {
         widgets::scroll_page(ui, "help_scroll", |ui| {
             for (title, blocks) in SECTIONS {
                 widgets::card(ui, |ui| {
-                    widgets::card_title(ui, title);
+                    widgets::card_title(ui, i18n::get(title));
                     ui.add_space(12.0);
                     ui.spacing_mut().item_spacing.y = 0.0;
                     for (i, b) in blocks.iter().enumerate() {
@@ -201,14 +203,14 @@ impl App {
             }
 
             widgets::card(ui, |ui| {
-                widgets::card_title(ui, "Kontakt");
+                widgets::card_title(ui, t!("help.contact.title"));
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     ui.set_min_height(24.0);
-                    ui.label(RichText::new("S dotazy a připomínkami k aplikaci se obraťte na").size(14.0).color(TEXT));
+                    ui.label(RichText::new(t!("help.contact.text")).size(14.0).color(TEXT));
                     ui.label(widgets::soft_mono_text(CONTACT, 13.0, MONO_INK));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if widgets::button(ui, None, "Napsat e-mail", Btn::Secondary, true).clicked() {
+                        if widgets::button(ui, None, t!("help.contact.write_email"), Btn::Secondary, true).clicked() {
                             local::open_url(&format!("mailto:{CONTACT}"));
                         }
                     });

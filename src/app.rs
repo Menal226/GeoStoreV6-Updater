@@ -6,8 +6,8 @@ use crate::logic::{self, PackageRow, Status};
 use crate::portal::Licence;
 use crate::theme::{self, *};
 use crate::widgets::{self, icon, Btn};
-use crate::worker::{self, CleanPlan, Cmd, Event, InstallOptions, Progress};
-use crate::{creds, daemon, local, paths, scheduler};
+use crate::worker::{self, CleanPlan, Cmd, Event, InstallOptions, Outcome, Progress};
+use crate::{creds, daemon, local, paths, scheduler, t};
 use chrono::{DateTime, Local};
 use eframe::egui::{self, Align, CornerRadius, Frame, Layout, Margin, RichText};
 use std::collections::BTreeMap;
@@ -46,6 +46,7 @@ pub struct LoginForm {
 #[derive(Clone)]
 pub struct OpUi {
     pub title: String,
+    pub update: bool,
     pub progress: Option<Progress>,
     pub waiting_geostore: bool,
     pub keys: Vec<String>,
@@ -53,8 +54,8 @@ pub struct OpUi {
 }
 
 impl OpUi {
-    pub fn new(title: impl Into<String>, keys: Vec<String>) -> Self {
-        Self { title: title.into(), progress: None, waiting_geostore: false, keys, done: Vec::new() }
+    pub fn new(title: impl Into<String>, update: bool, keys: Vec<String>) -> Self {
+        Self { title: title.into(), update, progress: None, waiting_geostore: false, keys, done: Vec::new() }
     }
 }
 
@@ -153,7 +154,7 @@ pub struct App {
     pub checking: bool,
     pub check_error: Option<String>,
     pub op: Option<OpUi>,
-    pub result: Option<(bool, String)>,
+    pub result: Option<(Outcome, String)>,
     pub log: Vec<LogLine>,
     pub show_detail: bool,
     pub geostore_running: bool,
@@ -286,9 +287,10 @@ impl App {
             }
         }
         if opts.contains(&"op") {
-            let mut op = OpUi::new("Instalace aktualizací", vec!["DTMCR".into(), "IG".into()]);
+            let mut op = OpUi::new(t!("app.op_update"), true, vec!["DTMCR".into(), "IG".into()]);
             op.done.push("V6-DTMČR".into());
             op.progress = Some(Progress {
+                kind: worker::StageKind::Download,
                 step: 2,
                 steps: 2,
                 package: "V6-IG".into(),
@@ -326,6 +328,15 @@ impl App {
         self.rows.iter().find(|r| r.key == key)
     }
 
+    pub(crate) fn set_language(&mut self, lang: crate::i18n::Lang) {
+        self.cfg.language = Some(lang);
+        self.cfg.save();
+        crate::i18n::set(lang);
+        for row in &mut self.rows {
+            row.info = crate::catalog::module_info(&row.key);
+        }
+    }
+
     pub fn busy(&self) -> bool {
         self.op.is_some()
     }
@@ -355,7 +366,7 @@ impl App {
             return;
         }
         let _ = std::fs::remove_file(Resume::path());
-        self.result = Some((false, "Instalace vyžaduje práva správce, oprávnění nebylo uděleno.".into()));
+        self.result = Some((Outcome::Failed, t!("app.admin_denied").into()));
     }
 
     fn resume_pending(&mut self) {
@@ -424,7 +435,7 @@ impl App {
                 Event::LoginFailed(e) => {
                     self.login.busy = false;
                     if self.logged_in {
-                        self.result = Some((false, format!("Přihlášení se nepodařilo uložit\n{e}")));
+                        self.result = Some((Outcome::Failed, t!("app.save_creds_failed", error = e)));
                     } else {
                         self.login.error = Some(e);
                     }
@@ -447,9 +458,9 @@ impl App {
                     self.checking = false;
                     self.check_error = Some(e);
                 }
-                Event::OpStarted { title } => {
+                Event::OpStarted { title, update } => {
                     let keys = self.op.take().map(|o| o.keys).unwrap_or_default();
-                    self.op = Some(OpUi::new(title, keys));
+                    self.op = Some(OpUi::new(title, update, keys));
                     self.result = None;
                 }
                 Event::Progress(p) => {
@@ -489,9 +500,9 @@ impl App {
                         Err(e) => Licences::Failed(e),
                     };
                 }
-                Event::OpFinished { ok, summary } => {
+                Event::OpFinished { outcome, summary } => {
                     self.op = None;
-                    self.result = Some((ok, summary));
+                    self.result = Some((outcome, summary));
                     self.cancel.store(false, Ordering::Relaxed);
                 }
             }
@@ -543,7 +554,7 @@ impl App {
             return;
         }
         let opts = self.install_options(force);
-        self.op = Some(OpUi::new("Instalace aktualizací", keys.clone()));
+        self.op = Some(OpUi::new(t!("app.op_update"), true, keys.clone()));
         self.result = None;
         self.send(Cmd::Install { keys, opts });
     }
@@ -560,7 +571,7 @@ impl App {
             match action {
                 Action::Login => {
                     if self.login.user.trim().is_empty() || self.login.pass.is_empty() {
-                        self.login.error = Some("Vyplňte uživatelské jméno a heslo.".into());
+                        self.login.error = Some(t!("app.fill_credentials").into());
                         continue;
                     }
                     self.login.busy = true;
@@ -603,7 +614,7 @@ impl App {
                     if plan.editor {
                         keys.insert(0, EDITOR.to_string());
                     }
-                    self.op = Some(OpUi::new("Nová instalace", keys));
+                    self.op = Some(OpUi::new(t!("app.op_clean"), false, keys));
                     self.result = None;
                     self.send(Cmd::CleanInstall { plan, opts });
                 }
@@ -630,7 +641,7 @@ impl App {
         daemon::stop();
         if let Err(e) = scheduler::uninstall() {
             self.view = View::Dashboard;
-            self.result = Some((false, format!("Odinstalace se nezdařila\n{}", worker::friendly_error(&e))));
+            self.result = Some((Outcome::Failed, t!("app.uninstall_failed", error = worker::friendly_error(&e))));
             return;
         }
         creds::delete();
@@ -681,8 +692,8 @@ impl App {
 
     fn geostore_warning(&self) -> Option<(&'static str, &'static str)> {
         self.geostore_running.then_some((
-            "GeoStore V6 je spuštěn",
-            "Uložte práci a zavřete jej. Instalace na jeho ukončení počká.",
+            t!("app.geostore_running"),
+            t!("app.geostore_running_body"),
         ))
     }
 
@@ -700,23 +711,23 @@ impl App {
             Confirm::UpdateAll(keys) => {
                 lines = keys.iter().map(|k| self.package_change_line(k)).collect();
                 let title = if keys.len() == 1 {
-                    format!("Aktualizovat {}?", self.names(keys))
+                    t!("app.update_one_title", name = self.names(keys))
                 } else {
-                    format!("Aktualizovat {} {}?", keys.len(), fmt::packages(keys.len()))
+                    t!("app.update_many_title", count = keys.len(), packages = fmt::packages(keys.len()))
                 };
-                (title, String::new(), "Aktualizovat", self.geostore_warning())
+                (title, String::new(), t!("app.update"), self.geostore_warning())
             }
             Confirm::Reinstall(key) => (
-                format!("Přeinstalovat {}?", self.names(std::slice::from_ref(key))),
+                t!("app.reinstall_title", name = self.names(std::slice::from_ref(key))),
                 String::new(),
-                "Přeinstalovat",
+                t!("app.reinstall"),
                 self.geostore_warning(),
             ),
             Confirm::InstallModule(key) => (
-                format!("Nainstalovat {}?", self.names(std::slice::from_ref(key))),
+                t!("app.install_title", name = self.names(std::slice::from_ref(key))),
                 String::new(),
-                "Nainstalovat",
-                Some(("Přepíše se nastavení prostředí", "Kompletní instalace přepíše nastavení v profilu uživatele (%LOCALAPPDATA%\\GEOVAP\\GSV6).")),
+                t!("app.install"),
+                Some((t!("app.env_overwrite"), t!("app.env_overwrite_body"))),
             ),
             Confirm::CleanInstall(plan) => {
                 if plan.editor {
@@ -728,31 +739,31 @@ impl App {
                         Licences::Ready(list) => list.iter().find(|l| &l.guid == guid).map(|l| l.title()),
                         _ => None,
                     };
-                    lines.push(("Licence".to_string(), name.unwrap_or_else(|| "gsfl.lic z licman".into())));
+                    lines.push((t!("app.licence").to_string(), name.unwrap_or_else(|| t!("app.licence_fallback").into())));
                 }
                 (
-                    "Spustit novou instalaci?".into(),
+                    t!("app.clean_title").into(),
                     String::new(),
-                    "Spustit instalaci",
-                    Some(("Přepíšou se konfigurační soubory", "Kompletní instalace přepíše soubory v C:\\V6-KONFIG a nastavení prostředí v profilu uživatele. Upravené konfigurační soubory se zálohují.")),
+                    t!("app.start_install"),
+                    Some((t!("app.config_overwrite"), t!("app.config_overwrite_body"))),
                 )
             }
             Confirm::CancelOp => (
-                "Přerušit instalaci?".into(),
-                "Rozpracovaný balíček se nedokončí a další balíčky ve frontě se nenainstalují. Již nainstalované balíčky zůstanou beze změny.".into(),
-                "Přerušit instalaci",
+                t!("app.cancel_title").into(),
+                t!("app.cancel_body").into(),
+                t!("app.cancel_install"),
                 None,
             ),
             Confirm::Uninstall => (
-                "Odinstalovat GeoStore Updater?".into(),
-                "Aplikace přestane běžet na pozadí a smaže se z počítače včetně nastavení, protokolů a uloženého přihlášení. GeoStore V6, nainstalovaná řešení a zálohy v C:\\V6-KONFIG_zalohy zůstanou beze změny.".into(),
-                "Odinstalovat",
+                t!("app.uninstall_title").into(),
+                t!("app.uninstall_body").into(),
+                t!("app.uninstall"),
                 None,
             ),
             Confirm::Logout => (
-                "Odhlásit se?".into(),
-                "Uložené přihlašovací údaje budou odstraněny. Automatické aktualizace nebudou fungovat, dokud se znovu nepřihlásíte.".into(),
-                "Odhlásit",
+                t!("app.logout_title").into(),
+                t!("app.logout_body").into(),
+                t!("app.logout"),
                 None,
             ),
         };
@@ -779,7 +790,7 @@ impl App {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
                 let kind = if matches!(c, Confirm::Logout | Confirm::CancelOp | Confirm::Uninstall) { Btn::Danger } else { Btn::Primary };
-                let back = if c == Confirm::CancelOp { "Pokračovat" } else { "Zrušit" };
+                let back = if c == Confirm::CancelOp { t!("app.continue") } else { t!("app.cancel") };
                 if widgets::button_sized(ui, None, back, Btn::Secondary, true, 96.0).clicked() {
                     close = true;
                 }
@@ -809,18 +820,18 @@ impl App {
         let modal = egui::Modal::new(egui::Id::new("save_creds")).frame(Self::modal_frame()).show(ctx, |ui| {
             ui.set_width(420.0);
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.label(RichText::new("Uložit přihlášení").size(20.0).color(TEXT));
+            ui.label(RichText::new(t!("app.save_creds_title")).size(20.0).color(TEXT));
             ui.add_space(16.0);
             ui.add(
                 egui::Label::new(
-                    RichText::new(format!("Zadejte heslo k účtu {user}. Heslo se uloží do Správce pověření systému Windows a použije se pro automatickou kontrolu."))
+                    RichText::new(t!("app.save_creds_body", user = user))
                         .size(14.0)
                         .color(MUTED),
                 )
                 .wrap(),
             );
             ui.add_space(16.0);
-            ui.label(RichText::new("Heslo").size(13.0).color(MUTED));
+            ui.label(RichText::new(t!("app.password")).size(13.0).color(MUTED));
             ui.add_space(6.0);
             let pass = self.save_creds.get_or_insert_with(String::new);
             let field = ui.add(egui::TextEdit::singleline(pass).password(true).desired_width(f32::INFINITY).margin(egui::vec2(12.0, 8.0)));
@@ -828,10 +839,10 @@ impl App {
             ui.add_space(24.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 8.0;
-                if widgets::button_sized(ui, None, "Zrušit", Btn::Secondary, true, 96.0).clicked() {
+                if widgets::button_sized(ui, None, t!("app.cancel"), Btn::Secondary, true, 96.0).clicked() {
                     close = true;
                 }
-                if widgets::button_sized(ui, None, "Uložit", Btn::Primary, !pass.is_empty(), 96.0).clicked() {
+                if widgets::button_sized(ui, None, t!("app.save"), Btn::Primary, !pass.is_empty(), 96.0).clicked() {
                     ok = true;
                 }
             });
@@ -864,11 +875,11 @@ impl App {
                 ui.add_space(4.0);
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let items = [
-                    (View::Dashboard, icon::HOME, "Přehled", pending),
-                    (View::Wizard, icon::PACKAGE, "Nová instalace", 0),
-                    (View::History, icon::HISTORY, "Historie", 0),
-                    (View::Settings, icon::SETTINGS, "Nastavení", 0),
-                    (View::Help, icon::HELP, "Nápověda", 0),
+                    (View::Dashboard, icon::HOME, t!("app.nav_dashboard"), pending),
+                    (View::Wizard, icon::PACKAGE, t!("app.nav_wizard"), 0),
+                    (View::History, icon::HISTORY, t!("app.nav_history"), 0),
+                    (View::Settings, icon::SETTINGS, t!("app.nav_settings"), 0),
+                    (View::Help, icon::HELP, t!("app.nav_help"), 0),
                 ];
                 for (view, ic, label, count) in items {
                     if widgets::nav_item(ui, ic, label, self.view == view, count).clicked() {
@@ -886,7 +897,7 @@ impl App {
                     row.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         ui.add_space(14.0);
                         let resp = ui
-                            .add_enabled(!busy, egui::Button::new(RichText::new("Odhlásit").size(13.0).color(MUTED)).frame(false))
+                            .add_enabled(!busy, egui::Button::new(RichText::new(t!("app.logout")).size(13.0).color(MUTED)).frame(false))
                             .on_hover_cursor(egui::CursorIcon::PointingHand);
                         if resp.clicked() {
                             self.actions.push(Action::Ask(Confirm::Logout));
@@ -924,19 +935,19 @@ impl App {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     ui.label(widgets::semibold_text(title, 15.0, TEXT));
-                    let stage = op.progress.as_ref().map(|p| p.stage.clone()).unwrap_or_else(|| "Připravuji…".into());
+                    let stage = op.progress.as_ref().map(|p| p.stage.clone()).unwrap_or_else(|| t!("app.preparing").into());
                     ui.label(widgets::path_job(&stage, 13.0, MUTED));
                 });
                 let cancellable = op.progress.as_ref().is_none_or(|p| p.cancellable) || op.waiting_geostore;
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if cancellable {
                         let cancelling = self.cancel.load(Ordering::Relaxed);
-                        let label = if cancelling { "Přerušuji…" } else { "Přerušit instalaci" };
+                        let label = if cancelling { t!("app.cancelling") } else { t!("app.cancel_install") };
                         if widgets::button(ui, None, label, Btn::Secondary, !cancelling).clicked() {
                             self.actions.push(Action::Ask(Confirm::CancelOp));
                         }
                     } else {
-                        ui.label(RichText::new("Tento krok nelze přerušit").size(12.5).color(SUBTLE));
+                        ui.label(RichText::new(t!("app.not_cancellable")).size(12.5).color(SUBTLE));
                     }
                 });
             });
@@ -983,8 +994,8 @@ impl App {
                 widgets::banner(
                     ui,
                     widgets::Tone::Warn,
-                    "Čekám na ukončení GeoStore V6",
-                    "Uložte svou práci a zavřete všechna okna GeoStore V6. Instalace potom automaticky pokračuje.",
+                    t!("app.waiting_geostore"),
+                    t!("app.waiting_geostore_body"),
                     0.0,
                     |_| {},
                 );
@@ -994,19 +1005,17 @@ impl App {
     }
 
     pub fn ui_result(&mut self, ui: &mut egui::Ui) {
-        let Some((ok, text)) = self.result.clone() else { return };
+        let Some((outcome, text)) = self.result.clone() else { return };
         let mut lines = text.lines();
         let head = lines.next().unwrap_or_default().trim_end_matches('.').to_string();
         let rest: Vec<&str> = lines.collect();
-        let tone = if ok {
-            widgets::Tone::Success
-        } else if head.contains("zrušena") || head.contains("upozorněním") {
-            widgets::Tone::Warn
-        } else {
-            widgets::Tone::Danger
+        let tone = match outcome {
+            Outcome::Success => widgets::Tone::Success,
+            Outcome::Warnings | Outcome::Cancelled => widgets::Tone::Warn,
+            Outcome::Failed => widgets::Tone::Danger,
         };
         widgets::banner(ui, tone, &head, &rest.join("\n"), 40.0, |ui| {
-            if widgets::button(ui, Some(icon::CANCEL), "", Btn::Ghost, true).on_hover_text("Skrýt").clicked() {
+            if widgets::button(ui, Some(icon::CANCEL), "", Btn::Ghost, true).on_hover_text(t!("app.hide")).clicked() {
                 self.actions.push(Action::DismissResult);
             }
         });
@@ -1014,11 +1023,11 @@ impl App {
 
     pub fn status_text(row: &PackageRow) -> (&'static str, egui::Color32, Option<&'static str>) {
         let estimated = (row.status == Status::UpToDate && !row.from_state)
-            .then_some("Stav je odhadnut podle data instalovaných souborů. Po první instalaci přes tuto aplikaci bude přesný.");
+            .then_some(t!("app.status_estimated"));
         match row.status {
-            Status::UpToDate => ("Aktuální", SUCCESS, estimated),
-            Status::UpdateAvailable => ("Nová verze", DANGER, None),
-            Status::NotInstalled => ("Nenainstalováno", SUBTLE, None),
+            Status::UpToDate => (t!("app.status_current"), SUCCESS, estimated),
+            Status::UpdateAvailable => (t!("app.status_new"), DANGER, None),
+            Status::NotInstalled => (t!("app.status_missing"), SUBTLE, None),
         }
     }
 

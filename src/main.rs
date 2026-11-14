@@ -6,6 +6,7 @@ mod config;
 mod creds;
 mod daemon;
 mod fmt;
+mod i18n;
 mod installer;
 mod local;
 mod logfile;
@@ -62,6 +63,7 @@ fn show_error(text: &str) {
 }
 
 fn main() -> eframe::Result<()> {
+    i18n::set(config::Config::load().lang());
     let flag = |name: &str| std::env::args().any(|a| a.eq_ignore_ascii_case(name));
     let relaunch = flag("--relaunch");
     if flag("--daemon") || flag("--background") {
@@ -109,11 +111,11 @@ fn main() -> eframe::Result<()> {
     };
     // OpenGL needs far less memory, but without a graphics driver (e.g. a VM without 3D acceleration) only Direct3D 12 works, on Windows' software renderer.
     let result = start(eframe::Renderer::Glow).or_else(|e| {
-        logfile::write(logfile::Level::Detail, &format!("OpenGL nelze použít ({e}), okno vykreslí Direct3D 12."));
+        logfile::write(logfile::Level::Detail, &t!("main.opengl_fallback", error = e));
         start(eframe::Renderer::Wgpu)
     });
     if let Err(e) = &result {
-        show_error(&format!("Okno aplikace se nepodařilo otevřít.\n\n{e}"));
+        show_error(&t!("main.window_failed", error = e));
     }
     result
 }

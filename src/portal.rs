@@ -12,6 +12,8 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::t;
+
 pub const BASE: &str = "https://portal.geostore.cz/v6/support/framework/";
 pub const LICMAN: &str = "https://install.geovap.cz/licman/app/framework/";
 const API_TIMEOUT: Duration = Duration::from_secs(60);
@@ -21,7 +23,7 @@ pub struct SessionExpired;
 
 impl std::fmt::Display for SessionExpired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Platnost přihlášení na portálu vypršela.")
+        f.write_str(t!("portal.session_expired"))
     }
 }
 
@@ -32,7 +34,7 @@ pub struct Cancelled;
 
 impl std::fmt::Display for Cancelled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Operace byla zrušena.")
+        f.write_str(t!("portal.cancelled"))
     }
 }
 
@@ -75,7 +77,7 @@ pub struct Licence {
 
 impl Licence {
     pub fn title(&self) -> String {
-        if self.project.is_empty() { "Licence GeoStore V6".into() } else { self.project.clone() }
+        if self.project.is_empty() { t!("portal.licence_title").into() } else { self.project.clone() }
     }
 
     pub fn detail(&self) -> String {
@@ -84,14 +86,14 @@ impl Licence {
             parts.push(self.company.clone());
         }
         if !self.float_max.is_empty() {
-            parts.push(format!("plovoucí {} / {}", if self.float_used.is_empty() { "0" } else { &self.float_used }, self.float_max));
+            parts.push(t!("portal.licence_floating", used = if self.float_used.is_empty() { "0" } else { &self.float_used }, max = self.float_max));
         }
         parts.push(match self.valid_to.split_whitespace().next() {
-            Some(d) => format!("platnost do {d}"),
-            None => "bez omezení platnosti".into(),
+            Some(d) => t!("portal.licence_valid_to", date = d),
+            None => t!("portal.licence_unlimited").into(),
         });
         if self.trial {
-            parts.push("zkušební".into());
+            parts.push(t!("portal.licence_trial").into());
         }
         parts.join(" · ")
     }
@@ -210,7 +212,7 @@ impl Portal {
     pub fn download_licence(&mut self, guid: &str) -> Result<String> {
         let guid = guid.to_lowercase();
         let Some(lic) = self.list_licences()?.into_iter().find(|l| l.guid == guid) else {
-            bail!("Vybraná licence už v systému licman není k dispozici.");
+            bail!(t!("portal.licence_unavailable"));
         };
         let params = json!([{"name": "selection$code", "type": "PKC", "value": lic.code}]);
         let b64 = base64::engine::general_purpose::STANDARD.encode(params.to_string());
@@ -225,13 +227,13 @@ impl Portal {
             ])
             .timeout(API_TIMEOUT)
             .send()
-            .context("Nelze se spojit se serverem install.geovap.cz")?;
+            .context(t!("portal.licman_connect"))?;
         if !resp.status().is_success() {
-            bail!("Licman při stahování licence vrátil chybu HTTP {}.", resp.status());
+            bail!(t!("portal.licman_http", status = resp.status()));
         }
         let text = resp.text()?.trim().to_string();
         if !licence_shape().is_match(&text) || !text.to_lowercase().starts_with(&guid) {
-            bail!("Licman nevydal platný licenční soubor.");
+            bail!(t!("portal.licman_invalid"));
         }
         Ok(text)
     }
@@ -252,28 +254,28 @@ impl Portal {
             .json(&body)
             .timeout(API_TIMEOUT)
             .send()
-            .context("Nelze se spojit s portálem portal.geostore.cz")?;
+            .context(t!("portal.connect"))?;
         match resp.status().as_u16() {
             200 => {}
-            403 => bail!("Pokus o přihlášení byl zamítnut, pravděpodobně kvůli příliš mnoha neúspěšným pokusům. Zkuste to prosím později."),
-            429 => bail!("Portál dočasně omezil počet požadavků. Zkuste to prosím za chvíli."),
-            s => bail!("Portál při přihlášení vrátil chybu HTTP {s}."),
+            403 => bail!(t!("portal.login_rejected")),
+            429 => bail!(t!("portal.rate_limited")),
+            s => bail!(t!("portal.login_http", status = s)),
         }
         let v: Value = resp
             .json()
-            .context("Portál vrátil neočekávanou odpověď při přihlášení")?;
+            .context(t!("portal.login_bad_response"))?;
         if let Some(m) = v.get("message").and_then(Value::as_str) {
             bail!("{m}");
         }
         if v.get("users").is_some() {
-            bail!("Účet je přiřazen k více uživatelům. Tento typ účtu zatím není podporován.");
+            bail!(t!("portal.multiple_users"));
         }
         let state = state_of(&v);
         if state >= 2 || v.get("url").is_none() {
             let msg = v
                 .get("error")
                 .and_then(Value::as_str)
-                .unwrap_or("Přihlášení se nezdařilo. Zkontrolujte jméno a heslo.");
+                .unwrap_or(t!("portal.login_failed"));
             bail!("{msg}");
         }
         self.user_name = v
@@ -297,7 +299,7 @@ impl Portal {
         let (u, p) = self
             .creds
             .clone()
-            .ok_or_else(|| anyhow!("Nejste přihlášeni k portálu."))?;
+            .ok_or_else(|| anyhow!(t!("portal.not_signed_in")))?;
         self.login(&u, &p)
     }
 
@@ -325,7 +327,7 @@ impl Portal {
             }
         }
         if roles.is_empty() {
-            bail!("K účtu nejsou na portálu přiřazeny žádné licence.");
+            bail!(t!("portal.no_licences"));
         }
         self.roles = roles;
         Ok(())
@@ -338,17 +340,17 @@ impl Portal {
             .json(body)
             .timeout(API_TIMEOUT)
             .send()
-            .context("Nelze se spojit s portálem portal.geostore.cz")?;
+            .context(t!("portal.connect"))?;
         match resp.status().as_u16() {
             200 => {}
             401 => return Err(SessionExpired.into()),
-            s => bail!("Portál vrátil chybu HTTP {s}."),
+            s => bail!(t!("portal.http_error", status = s)),
         }
         let path = resp.url().path().to_lowercase();
         if path.contains("login") || path.contains("logout") {
             return Err(SessionExpired.into());
         }
-        let v: Value = resp.json().context("Portál vrátil neočekávanou odpověď")?;
+        let v: Value = resp.json().context(t!("portal.bad_response"))?;
         let state = state_of(&v);
         if state == 99 {
             return Err(SessionExpired.into());
@@ -358,8 +360,8 @@ impl Portal {
                 .get("message")
                 .or_else(|| v.get("error"))
                 .and_then(Value::as_str)
-                .unwrap_or("neznámá chyba");
-            bail!("Portál vrátil chybu: {m}");
+                .unwrap_or(t!("portal.unknown_error"));
+            bail!(t!("portal.error", message = m));
         }
         Ok(v)
     }
@@ -481,7 +483,7 @@ impl Portal {
                 .form(&[("pars", b64.as_str())])
                 .timeout(API_TIMEOUT)
                 .send()
-                .context("Nelze se spojit s portálem portal.geostore.cz")?
+                .context(t!("portal.connect"))?
                 .text()?;
             if let Some(c) = re.captures(&html) {
                 let link = html_escape::decode_html_entities(&c[1]).to_string();
@@ -491,10 +493,7 @@ impl Portal {
                 self.relogin()?;
             }
         }
-        bail!(
-            "Na portálu se nepodařilo najít odkaz ke stažení souboru {}.",
-            f.title
-        )
+        bail!(t!("portal.link_not_found", title = f.title))
     }
 
     pub fn download(
@@ -510,9 +509,9 @@ impl Portal {
                 .client
                 .get(url)
                 .send()
-                .context("Stahování se nezdařilo – nelze se spojit se serverem")?;
+                .context(t!("portal.download_connect"))?;
             if !resp.status().is_success() {
-                bail!("Server při stahování vrátil chybu HTTP {}.", resp.status());
+                bail!(t!("portal.download_http", status = resp.status()));
             }
             let ct = resp
                 .headers()
@@ -528,7 +527,7 @@ impl Portal {
                     continue;
                 }
                 let short: String = text.chars().take(200).collect();
-                bail!("Portál soubor nevydal: {short}");
+                bail!(t!("portal.not_issued", text = short));
             }
             break resp;
         };
@@ -548,7 +547,7 @@ impl Portal {
                 Err(e) => {
                     drop(file);
                     let _ = std::fs::remove_file(&part);
-                    return Err(anyhow!(e).context("Stahování bylo přerušeno"));
+                    return Err(anyhow!(e).context(t!("portal.download_interrupted")));
                 }
             };
             if n == 0 {
@@ -562,7 +561,7 @@ impl Portal {
         drop(file);
         if total == 0 {
             let _ = std::fs::remove_file(&part);
-            bail!("Stažený soubor je prázdný.");
+            bail!(t!("portal.empty_file"));
         }
         std::fs::rename(&part, dest)?;
         Ok(total)

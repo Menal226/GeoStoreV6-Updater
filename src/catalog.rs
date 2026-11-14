@@ -1,3 +1,5 @@
+use crate::t;
+
 pub const EDITOR: &str = "EDITOR";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,7 +30,7 @@ pub fn module_info(key: &str) -> ModuleInfo {
     ) = match key {
         EDITOR => (
             "GeoStore V6".into(),
-            "Základní grafický editor",
+            t!("catalog.editor_desc"),
             "GS".into(),
             vec!["GeoStore.exe"],
             Some("GeoStore.exe"),
@@ -36,7 +38,7 @@ pub fn module_info(key: &str) -> ModuleInfo {
         ),
         "DTMCR" => (
             "V6-DTMČR".into(),
-            "Digitální technická mapa ČR",
+            t!("catalog.dtmcr_desc"),
             "DTM".into(),
             vec!["V6_dtmcr.dll"],
             Some("V6_dtmcr.dll"),
@@ -44,7 +46,7 @@ pub fn module_info(key: &str) -> ModuleInfo {
         ),
         "IG" => (
             "V6-IG".into(),
-            "Inženýrská geodézie",
+            t!("catalog.ig_desc"),
             "IG".into(),
             vec!["techline.dll"],
             Some("techline.dll"),
@@ -52,7 +54,7 @@ pub fn module_info(key: &str) -> ModuleInfo {
         ),
         "3D" => (
             "V6-3D".into(),
-            "3D a laserové skenování",
+            t!("catalog.scan_3d_desc"),
             "3D".into(),
             vec!["V6_3D.dll"],
             Some("V6_3D.dll"),
@@ -60,7 +62,7 @@ pub fn module_info(key: &str) -> ModuleInfo {
         ),
         "DWG" => (
             "DWG-DGN".into(),
-            "Práce s výkresy DWG a DGN",
+            t!("catalog.dwg_desc"),
             "DWG".into(),
             vec!["GSv6Dwg.dll", "GSDwgCore.dll"],
             Some("GSv6Dwg.dll"),
@@ -68,7 +70,7 @@ pub fn module_info(key: &str) -> ModuleInfo {
         ),
         other => (
             format!("V6-{other}"),
-            "Aplikační řešení",
+            t!("catalog.module_desc"),
             other.chars().take(3).collect(),
             vec![],
             None,

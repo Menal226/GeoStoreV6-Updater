@@ -1,5 +1,5 @@
 use crate::logfile::{self, Level};
-use crate::{local, paths};
+use crate::{local, paths, t};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::cmp::Ordering;
@@ -50,14 +50,14 @@ pub fn run() -> bool {
     match update() {
         Ok(replaced) => replaced,
         Err(e) => {
-            logfile::write(Level::Detail, &format!("Aktualizace aplikace se nezdařila: {e:#}"));
+            logfile::write(Level::Detail, &t!("selfupdate.failed", error = format!("{e:#}")));
             false
         }
     }
 }
 
 fn update() -> Result<bool> {
-    let exe = app_exe().context("Nelze zjistit cestu k programu")?;
+    let exe = app_exe().context(t!("selfupdate.no_exe_path"))?;
     let _ = std::fs::remove_file(old_path(&exe));
 
     let staged = staged_path();
@@ -90,7 +90,7 @@ fn update() -> Result<bool> {
         .assets
         .iter()
         .find(|a| a.name.eq_ignore_ascii_case(ASSET))
-        .with_context(|| format!("Vydání {} neobsahuje soubor {ASSET}", release.tag_name))?;
+        .with_context(|| t!("selfupdate.asset_missing", tag = release.tag_name, file = ASSET))?;
 
     let part = staged.with_extension("part");
     let mut resp = client.get(&asset.browser_download_url).send()?.error_for_status()?;
@@ -100,13 +100,13 @@ fn update() -> Result<bool> {
     };
     if written != asset.size {
         let _ = std::fs::remove_file(&part);
-        bail!("Stažený soubor má {written} B místo {} B", asset.size);
+        bail!(t!("selfupdate.size_mismatch", written = written, expected = asset.size));
     }
     std::fs::rename(&part, &staged)?;
     let file_version = local::file_version(&staged).unwrap_or_default();
     if local::compare_versions(&file_version, &version) != Ordering::Equal {
         let _ = std::fs::remove_file(&staged);
-        bail!("Stažený soubor má verzi {file_version}, očekávána {version}");
+        bail!(t!("selfupdate.version_mismatch", found = file_version, expected = version));
     }
     replace(&exe, &staged).map(|_| true)
 }
@@ -117,15 +117,15 @@ fn replace(exe: &Path, staged: &Path) -> Result<()> {
     if std::fs::copy(staged, exe).is_err() {
         let old = old_path(exe);
         let _ = std::fs::remove_file(&old);
-        std::fs::rename(exe, &old).context("Nelze přejmenovat spuštěný program")?;
+        std::fs::rename(exe, &old).context(t!("selfupdate.rename_failed"))?;
         if let Err(e) = std::fs::copy(staged, exe) {
             let _ = std::fs::rename(&old, exe);
-            return Err(e).context("Nelze zapsat novou verzi programu");
+            return Err(e).context(t!("selfupdate.write_failed"));
         }
         hide(&old);
     }
     let _ = std::fs::remove_file(staged);
-    logfile::write(Level::Info, &format!("Připravena nová verze aplikace {version}, použije se při příštím spuštění."));
+    logfile::write(Level::Info, &t!("selfupdate.ready", version = version));
     Ok(())
 }
 

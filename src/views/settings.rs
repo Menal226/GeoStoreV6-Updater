@@ -1,7 +1,9 @@
 use crate::app::{Action, App};
 use crate::config::CheckMode;
 use crate::fmt;
+use crate::i18n;
 use crate::installer;
+use crate::t;
 use crate::{local, paths};
 use crate::theme::*;
 use crate::widgets::{self, icon, Btn};
@@ -12,17 +14,13 @@ const VALUE_COL: f32 = 200.0;
 pub(super) const REPO_URL: &str = "https://github.com/Menal226/GeoStoreV6-Updater";
 
 fn interval_label(h: u32) -> String {
-    match h {
-        1 => "každou hodinu".into(),
-        2..=4 => format!("každé {h} hodiny"),
-        _ => format!("každých {h} hodin"),
-    }
+    i18n::fill(i18n::plural("settings.interval", h as u64), &[("n", h.to_string())])
 }
 
 fn mode_label(mode: CheckMode) -> &'static str {
     match mode {
-        CheckMode::Interval => "Pravidelně",
-        CheckMode::Daily => "Jednou denně",
+        CheckMode::Interval => t!("settings.mode_interval"),
+        CheckMode::Daily => t!("settings.mode_daily"),
     }
 }
 
@@ -72,14 +70,18 @@ fn label(text: &str) -> RichText {
 
 impl App {
     pub(crate) fn ui_settings(&mut self, ui: &mut egui::Ui) {
-        widgets::page_header(ui, "Nastavení", "", None, |_| {});
+        let mut language = None;
+        widgets::page_header(ui, t!("settings.title"), "", None, |ui| language = widgets::language_picker(ui, self.cfg.lang()));
+        if let Some(lang) = language {
+            self.set_language(lang);
+        }
         let mut changed = false;
 
         widgets::scroll_page(ui, "settings_scroll", |ui| {
             widgets::card(ui, |ui| {
-                widgets::card_title(ui, "Automatické aktualizace");
+                widgets::card_title(ui, t!("settings.auto_updates.title"));
                 ui.add_space(12.0);
-                changed |= widgets::checkbox(ui, &mut self.cfg.auto_check, label("Automaticky kontrolovat dostupnost aktualizací"), true).changed();
+                changed |= widgets::checkbox(ui, &mut self.cfg.auto_check, label(t!("settings.auto_check")), true).changed();
                 widgets::indented(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.set_min_height(32.0);
@@ -107,7 +109,7 @@ impl App {
                                             });
                                     }
                                     CheckMode::Daily => {
-                                        ui.label(RichText::new("v").size(13.0).color(MUTED));
+                                        ui.label(RichText::new(t!("settings.daily_at")).size(13.0).color(MUTED));
                                         egui::ComboBox::from_id_salt("hour")
                                             .width(56.0)
                                             .icon(widgets::chevron)
@@ -134,10 +136,10 @@ impl App {
                     });
                 });
                 ui.add_space(8.0);
-                changed |= widgets::checkbox(ui, &mut self.cfg.auto_install, label("Nalezené aktualizace instalovat automaticky"), true).changed();
+                changed |= widgets::checkbox(ui, &mut self.cfg.auto_install, label(t!("settings.auto_install")), true).changed();
                 if let Some(err) = &self.task_error {
                     ui.add_space(8.0);
-                    ui.label(RichText::new(format!("Aplikace se nebude spouštět s Windows: {err}")).size(13.0).color(DANGER));
+                    ui.label(RichText::new(t!("settings.task_error", err = err)).size(13.0).color(DANGER));
                 }
                 if self.cfg.auto_check && !self.creds_stored {
                     ui.add_space(8.0);
@@ -153,12 +155,12 @@ impl App {
                                 ui.spacing_mut().item_spacing.x = 10.0;
                                 ui.label(widgets::icon_text(icon::WARNING, 14.0, WARN));
                                 ui.label(
-                                    RichText::new("Automatická kontrola vyžaduje uložené přihlášení")
+                                    RichText::new(t!("settings.creds_required"))
                                         .size(13.0)
                                         .color(TEXT),
                                 );
                                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                    if widgets::button(ui, None, "Uložit přihlášení", Btn::Secondary, true).clicked() {
+                                    if widgets::button(ui, None, t!("settings.save_creds"), Btn::Secondary, true).clicked() {
                                         self.actions.push(Action::SaveCreds);
                                     }
                                 });
@@ -169,18 +171,18 @@ impl App {
             ui.add_space(12.0);
 
             widgets::card(ui, |ui| {
-                widgets::card_title(ui, "Instalace");
+                widgets::card_title(ui, t!("settings.install.title"));
                 ui.add_space(6.0);
-                let folder_w = widgets::button_width(ui, Some(icon::FOLDER), "Otevřít složku");
+                let folder_w = widgets::button_width(ui, Some(icon::FOLDER), t!("settings.open_folder"));
                 option_row(
                     ui,
                     folder_w,
                     true,
                     |ui| {
-                        changed |= widgets::checkbox(ui, &mut self.cfg.backup_konfig, widgets::path_job("Před přepsáním zálohovat upravené soubory v C:\\V6-KONFIG", 14.0, TEXT), true).changed();
+                        changed |= widgets::checkbox(ui, &mut self.cfg.backup_konfig, widgets::path_job(t!("settings.backup_konfig"), 14.0, TEXT), true).changed();
                     },
                     |ui| {
-                        if widgets::button(ui, Some(icon::FOLDER), "Otevřít složku", Btn::Secondary, true).clicked() {
+                        if widgets::button(ui, Some(icon::FOLDER), t!("settings.open_folder"), Btn::Secondary, true).clicked() {
                             App::open(paths::BACKUP_ROOT);
                         }
                     },
@@ -192,25 +194,25 @@ impl App {
                     .filter_map(|p| std::fs::metadata(p).ok())
                     .map(|m| m.len())
                     .sum();
-                let delete_w = if size > 0 { widgets::button_width(ui, Some(icon::DELETE), "Smazat") + ui.spacing().item_spacing.x } else { 0.0 };
+                let delete_w = if size > 0 { widgets::button_width(ui, Some(icon::DELETE), t!("settings.delete")) + ui.spacing().item_spacing.x } else { 0.0 };
                 let busy = self.busy();
                 option_row(
                     ui,
                     folder_w + delete_w,
                     size == 0,
                     |ui| {
-                        changed |= widgets::checkbox(ui, &mut self.cfg.keep_downloads, label("Ponechat stažené instalační balíčky"), true).changed();
+                        changed |= widgets::checkbox(ui, &mut self.cfg.keep_downloads, label(t!("settings.keep_downloads")), true).changed();
                         if size > 0 {
-                            widgets::indented(ui, |ui| widgets::muted(ui, &format!("Stažené balíčky zabírají {}", fmt::mb(size))));
+                            widgets::indented(ui, |ui| widgets::muted(ui, &t!("settings.downloads_size", size = fmt::mb(size))));
                         }
                     },
                     |ui| {
-                        if size > 0 && widgets::button(ui, Some(icon::DELETE), "Smazat", Btn::Secondary, !busy).clicked() {
+                        if size > 0 && widgets::button(ui, Some(icon::DELETE), t!("settings.delete"), Btn::Secondary, !busy).clicked() {
                             for f in installer::walk_files(&dl) {
                                 let _ = std::fs::remove_file(f);
                             }
                         }
-                        if widgets::button(ui, Some(icon::FOLDER), "Otevřít složku", Btn::Secondary, true).clicked() {
+                        if widgets::button(ui, Some(icon::FOLDER), t!("settings.open_folder"), Btn::Secondary, true).clicked() {
                             App::open(&dl);
                         }
                     },
@@ -219,10 +221,10 @@ impl App {
             ui.add_space(12.0);
 
             widgets::card(ui, |ui| {
-                widgets::card_title(ui, "Sledované balíčky");
+                widgets::card_title(ui, t!("settings.tracked.title"));
                 ui.add_space(12.0);
                 if self.rows.is_empty() {
-                    widgets::muted(ui, "Seznam balíčků zatím nebyl načten");
+                    widgets::muted(ui, t!("settings.tracked.not_loaded"));
                 }
                 let rows = self.rows.clone();
                 for row in rows {
@@ -239,7 +241,7 @@ impl App {
                                 ui.label(widgets::soft_mono_text(v, 13.0, MONO_INK));
                             }
                             _ => {
-                                ui.label(RichText::new("nenalezeno v počítači").size(13.0).color(WARN));
+                                ui.label(RichText::new(t!("settings.tracked.not_found")).size(13.0).color(WARN));
                             }
                         }
                     });
@@ -248,28 +250,28 @@ impl App {
             ui.add_space(12.0);
 
             widgets::card(ui, |ui| {
-                widgets::card_title(ui, "Účet");
+                widgets::card_title(ui, t!("settings.account.title"));
                 ui.add_space(12.0);
-                field_row(ui, "Uživatel", RichText::new(&self.user).size(14.0).color(TEXT));
+                field_row(ui, t!("settings.account.user"), RichText::new(&self.user).size(14.0).color(TEXT));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.horizontal(|ui| {
                         ui.allocate_ui_with_layout(egui::vec2(VALUE_COL, 24.0), Layout::left_to_right(Align::Center), |ui| {
                             ui.set_width(VALUE_COL);
-                            ui.label(RichText::new("Přihlášení").size(14.0).color(MUTED));
+                            ui.label(RichText::new(t!("settings.account.signin")).size(14.0).color(MUTED));
                         });
                         if self.creds_stored {
-                            widgets::mark_label(ui, widgets::Mark::Success, "Uloženo ve Správci pověření Windows", 14.0);
+                            widgets::mark_label(ui, widgets::Mark::Success, t!("settings.account.stored"), 14.0);
                         } else {
-                            widgets::mark_label(ui, widgets::Mark::Empty, "Neuloženo", 14.0);
+                            widgets::mark_label(ui, widgets::Mark::Empty, t!("settings.account.not_stored"), 14.0);
                         }
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if self.creds_stored {
-                            if widgets::button(ui, Some(icon::DELETE), "Odebrat uložené přihlášení", Btn::Secondary, true).clicked() {
+                            if widgets::button(ui, Some(icon::DELETE), t!("settings.account.forget"), Btn::Secondary, true).clicked() {
                                 self.actions.push(Action::ForgetCreds);
                             }
-                        } else if widgets::button(ui, None, "Uložit přihlášení", Btn::Secondary, true).clicked() {
+                        } else if widgets::button(ui, None, t!("settings.save_creds"), Btn::Secondary, true).clicked() {
                             self.actions.push(Action::SaveCreds);
                         }
                     });
@@ -278,31 +280,31 @@ impl App {
             ui.add_space(12.0);
 
             widgets::card(ui, |ui| {
-                widgets::card_title(ui, "O aplikaci");
+                widgets::card_title(ui, t!("settings.about.title"));
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    field_row(ui, "Verze", widgets::soft_mono_text(env!("CARGO_PKG_VERSION"), 13.0, MONO_INK));
+                    field_row(ui, t!("settings.about.version"), widgets::soft_mono_text(env!("CARGO_PKG_VERSION"), 13.0, MONO_INK));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if widgets::button(ui, Some(icon::LINK), "Otevřít na GitHubu", Btn::Secondary, true).clicked() {
+                        if widgets::button(ui, Some(icon::LINK), t!("settings.about.open_github"), Btn::Secondary, true).clicked() {
                             local::open_url(REPO_URL);
                         }
                     });
                 });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    field_row(ui, "Data aplikace", widgets::soft_mono_text(paths::data_dir().display().to_string(), 13.0, MONO_INK));
+                    field_row(ui, t!("settings.about.data"), widgets::soft_mono_text(paths::data_dir().display().to_string(), 13.0, MONO_INK));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if widgets::button(ui, Some(icon::FOLDER), "Otevřít složku", Btn::Secondary, true).clicked() {
+                        if widgets::button(ui, Some(icon::FOLDER), t!("settings.open_folder"), Btn::Secondary, true).clicked() {
                             App::open(paths::data_dir());
                         }
                     });
                 });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    field_row(ui, "Odinstalace", "");
+                    field_row(ui, t!("settings.about.uninstall"), "");
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let idle = !self.busy() && !self.bg_busy;
-                        if widgets::button(ui, Some(icon::DELETE), "Odinstalovat aplikaci", Btn::Secondary, idle).clicked() {
+                        if widgets::button(ui, Some(icon::DELETE), t!("settings.about.uninstall_app"), Btn::Secondary, idle).clicked() {
                             self.actions.push(Action::Ask(crate::app::Confirm::Uninstall));
                         }
                     });

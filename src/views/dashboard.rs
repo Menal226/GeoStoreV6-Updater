@@ -1,8 +1,11 @@
 use crate::app::{Action, App, Confirm};
 use crate::fmt;
+use crate::i18n;
 use crate::logic::{PackageRow, Status};
+use crate::t;
 use crate::theme::*;
 use crate::widgets::{self, icon, Btn, Mark, Tone};
+use crate::worker::StageKind;
 use chrono::Local;
 use eframe::egui::{self, Align, CornerRadius, Frame, Layout, Margin, RichText, Stroke};
 
@@ -10,10 +13,6 @@ const TILE: f32 = 40.0;
 const TILE_GAP: f32 = 12.0;
 const MORE_SLOT: f32 = 32.0;
 const MIN_GAP: f32 = 16.0;
-
-fn updates_word(n: usize) -> &'static str {
-    if n >= 5 { "aktualizací" } else { "aktualizace" }
-}
 
 enum RowState {
     Installing(String),
@@ -68,8 +67,8 @@ fn header_text(text: &str) -> RichText {
     RichText::new(text).size(12.0).color(SUBTLE)
 }
 
-const INSTALL_LABEL: (Option<char>, &str) = (None, "Nainstalovat");
-const UPDATE_LABEL: (Option<char>, &str) = (Some(icon::DOWNLOAD), "Aktualizovat");
+const INSTALL_LABEL: (Option<char>, &str) = (None, "dashboard.install");
+const UPDATE_LABEL: (Option<char>, &str) = (Some(icon::DOWNLOAD), "dashboard.update");
 
 /// One or two text lines, centred as a block within the row height.
 fn cell(ui: &mut egui::Ui, width: f32, first: impl Into<egui::WidgetText>, second: Option<egui::WidgetText>) -> egui::Response {
@@ -93,27 +92,27 @@ impl App {
     fn dashboard_status(&self, pending: usize) -> (String, Mark) {
         if let Some(op) = &self.op {
             let text = match op.progress.as_ref().filter(|p| p.steps > 0) {
-                Some(p) if p.steps > 1 => format!("Probíhá instalace · balíček {} ze {}", p.step, p.steps),
-                _ => "Probíhá instalace".into(),
+                Some(p) if p.steps > 1 => t!("dashboard.installing_step", step = p.step, steps = p.steps),
+                _ => t!("dashboard.installing").into(),
             };
             return (text, Mark::Busy);
         }
         if self.checking {
-            return ("Kontroluji dostupné balíčky na portálu…".into(), Mark::Busy);
+            return (t!("dashboard.checking_portal").into(), Mark::Busy);
         }
         if self.check_error.is_some() && self.rows.is_empty() {
-            return ("Kontrola se nezdařila".into(), Mark::Error);
+            return (t!("dashboard.check_failed").into(), Mark::Error);
         }
         let Some(t) = self.last_check else {
-            return ("Zatím neproběhla žádná kontrola".into(), Mark::Empty);
+            return (t!("dashboard.never_checked").into(), Mark::Empty);
         };
-        let when = format!("poslední kontrola {}", fmt::datetime(t));
+        let when = t!("dashboard.last_check", when = fmt::datetime(t));
         if self.editor_missing() {
-            (format!("GeoStore V6 není nainstalován · {when}"), Mark::Pending)
+            (t!("dashboard.editor_missing", when = when), Mark::Pending)
         } else if pending > 0 {
-            (format!("K dispozici {pending} {} · {when}", updates_word(pending)), Mark::Error)
+            (i18n::fill(i18n::plural("dashboard.updates_available", pending as u64), &[("n", pending.to_string()), ("when", when)]), Mark::Error)
         } else {
-            (format!("Vše aktuální · {when}"), Mark::Success)
+            (t!("dashboard.all_up_to_date", when = when), Mark::Success)
         }
     }
 
@@ -129,15 +128,13 @@ impl App {
         if op.done.contains(&row.info.name) {
             Some(RowState::Finished)
         } else if let Some(p) = op.progress.as_ref().filter(|p| p.package == row.info.name) {
-            let label = if p.stage.starts_with("Stahování") {
-                match p.fraction {
-                    Some(f) => format!("Stahování · {:.0} %", f * 100.0),
-                    None => "Stahování…".into(),
-                }
-            } else if p.stage.starts_with("Rozbalování") {
-                "Rozbalování…".into()
-            } else {
-                "Instalace…".into()
+            let label = match p.kind {
+                StageKind::Download => match p.fraction {
+                    Some(f) => t!("dashboard.stage_download_percent", percent = format!("{:.0}", f * 100.0)),
+                    None => t!("dashboard.stage_download").into(),
+                },
+                StageKind::Extract => t!("dashboard.stage_extract").into(),
+                StageKind::Other => t!("dashboard.stage_install").into(),
             };
             Some(RowState::Installing(label))
         } else {
@@ -156,17 +153,17 @@ impl App {
         let checking = self.checking;
         let busy = self.busy();
         let editor_missing = self.editor_missing();
-        widgets::page_header(ui, "Přehled", &subtitle, Some(mark), |ui| {
-            if editor_missing && !busy && widgets::button(ui, Some(icon::PACKAGE), "Nová instalace", Btn::Primary, true).clicked() {
+        widgets::page_header(ui, t!("dashboard.title"), &subtitle, Some(mark), |ui| {
+            if editor_missing && !busy && widgets::button(ui, Some(icon::PACKAGE), t!("dashboard.new_installation"), Btn::Primary, true).clicked() {
                 self.actions.push(Action::Navigate(crate::app::View::Wizard));
             }
             if !pending.is_empty()
                 && !busy
-                && widgets::button(ui, Some(icon::DOWNLOAD), &format!("Aktualizovat vše ({})", pending.len()), Btn::Primary, can_install).clicked()
+                && widgets::button(ui, Some(icon::DOWNLOAD), &t!("dashboard.update_all", count = pending.len()), Btn::Primary, can_install).clicked()
             {
                 self.actions.push(Action::Ask(Confirm::UpdateAll(pending.clone())));
             }
-            let label = if checking { "Kontroluji…" } else { "Zkontrolovat" };
+            let label = if checking { t!("dashboard.checking") } else { t!("dashboard.check_now") };
             if !busy && widgets::button(ui, Some(icon::REFRESH), label, Btn::Secondary, !checking && !self.bg_busy).clicked() {
                 self.actions.push(Action::Check);
             }
@@ -180,22 +177,22 @@ impl App {
                     widgets::banner(
                         ui,
                         Tone::Info,
-                        "Probíhá automatická instalace aktualizací",
-                        "Přehled se obnoví po jejím dokončení.",
+                        t!("dashboard.bg_install_title"),
+                        t!("dashboard.bg_install_text"),
                         0.0,
                         |_| {},
                     );
                 }
 
                 if let Some(err) = self.check_error.clone() {
-                    widgets::banner(ui, Tone::Danger, "Kontrola aktualizací selhala", &err, 0.0, |_| {});
+                    widgets::banner(ui, Tone::Danger, t!("dashboard.check_error"), &err, 0.0, |_| {});
                 }
                 if self.geostore_running && (!pending.is_empty() || self.busy()) {
                     widgets::banner(
                         ui,
                         Tone::Info,
-                        "GeoStore V6 je spuštěn",
-                        "Před instalací aktualizací jej prosím zavřete. Spuštěná instalace na jeho ukončení počká.",
+                        t!("dashboard.editor_running_title"),
+                        t!("dashboard.editor_running_text"),
                         0.0,
                         |_| {},
                     );
@@ -206,7 +203,7 @@ impl App {
                         widgets::card(ui, |ui| {
                             ui.horizontal(|ui| {
                                 widgets::spinner(ui, 16.0);
-                                ui.label(RichText::new("Načítám seznam balíčků z portálu…").color(MUTED));
+                                ui.label(RichText::new(t!("dashboard.loading_packages")).color(MUTED));
                             });
                         });
                     }
@@ -220,7 +217,7 @@ impl App {
 
                 if tracked.is_empty() {
                     widgets::card(ui, |ui| {
-                        widgets::muted(ui, "Žádný balíček není sledován. Nainstalujte řešení v sekci Nová instalace nebo zapněte sledování níže.");
+                        widgets::muted(ui, t!("dashboard.none_tracked"));
                     });
                 } else {
                     self.ui_package_list(ui, &tracked, true, &cols);
@@ -228,7 +225,7 @@ impl App {
                 self.ui_next_check(ui);
 
                 if !others.is_empty() {
-                    widgets::section_title(ui, "Další balíčky dostupné pro váš účet", "");
+                    widgets::section_title(ui, t!("dashboard.other_packages"), "");
                     self.ui_package_list(ui, &others, false, &cols);
                 }
                 ui.add_space(16.0);
@@ -242,9 +239,9 @@ impl App {
         }
         let next = self.cfg.next_check(self.last_auto_check);
         let text = if next <= Local::now() {
-            "Další automatická kontrola proběhne za chvíli".to_string()
+            t!("dashboard.next_check_soon").to_string()
         } else {
-            format!("Další automatická kontrola {}", fmt::datetime(next))
+            t!("dashboard.next_check", when = fmt::datetime(next))
         };
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -259,18 +256,18 @@ impl App {
         let finished = matches!(row_state, Some(RowState::Finished));
         let version = row.local_version.clone().filter(|_| row.detected || finished);
         let (date, installed_tip) = match (finished, row.detected, row.installed_date) {
-            (true, _, _) => (row.latest.as_ref().map(|f| f.date), "Balíček byl právě nainstalován touto aplikací"),
+            (true, _, _) => (row.latest.as_ref().map(|f| f.date), t!("dashboard.tip_just_installed")),
             (false, false, _) => (None, ""),
-            (false, true, d) if row.from_state => (d, "Datum vydání balíčku, který tato aplikace nainstalovala"),
-            (false, true, d) => (d, "Datum nainstalovaných souborů. Balíček nebyl instalován touto aplikací, stav se proto odhaduje."),
+            (false, true, d) if row.from_state => (d, t!("dashboard.tip_installed_by_app")),
+            (false, true, d) => (d, t!("dashboard.tip_installed_elsewhere")),
         };
         let installed = match date {
             Some(d) => widgets::mono_text(fmt::date(d), 13.0, if finished { SUCCESS } else { MONO_INK }),
             None => widgets::mono_text("—", 13.0, SUBTLE),
         };
         let version = match (&version, row.detected || finished) {
-            (Some(v), _) => Some(widgets::numbers_job(&format!("verze {v}"), 12.5, SECONDARY_INK)),
-            (None, true) => Some(widgets::numbers_job("verze neznámá", 12.5, SECONDARY_INK)),
+            (Some(v), _) => Some(widgets::numbers_job(&t!("dashboard.version", version = v), 12.5, SECONDARY_INK)),
+            (None, true) => Some(widgets::numbers_job(t!("dashboard.version_unknown"), 12.5, SECONDARY_INK)),
             (None, false) => None,
         };
         let newer = row.status == Status::UpdateAvailable && !finished;
@@ -278,9 +275,9 @@ impl App {
         let op_running = self.op.is_some();
         let state = match row_state {
             Some(RowState::Installing(label)) => StateCell::Busy(label),
-            Some(RowState::Queued) => StateCell::Text("Čeká ve frontě", SUBTLE, None),
+            Some(RowState::Queued) => StateCell::Text(t!("dashboard.queued"), SUBTLE, None),
             Some(RowState::Finished) => {
-                let label = if self.op.as_ref().is_some_and(|o| o.title == "Instalace aktualizací") { "Aktualizováno" } else { "Nainstalováno" };
+                let label = if self.op.as_ref().is_some_and(|o| o.update) { t!("dashboard.updated") } else { t!("dashboard.installed") };
                 StateCell::Text(label, SUCCESS, None)
             }
             None => match row.status {
@@ -305,10 +302,10 @@ impl App {
 
     fn measure_cols(&self, ui: &egui::Ui) -> Cols {
         let mut c = Cols {
-            name: (text_width(ui, header_text("Balíček")) - TILE - TILE_GAP).max(0.0),
-            installed: text_width(ui, header_text("Nainstalováno")),
-            portal: text_width(ui, header_text("Na portálu")),
-            state: text_width(ui, header_text("Stav")),
+            name: (text_width(ui, header_text(t!("dashboard.col_package"))) - TILE - TILE_GAP).max(0.0),
+            installed: text_width(ui, header_text(t!("dashboard.col_installed"))),
+            portal: text_width(ui, header_text(t!("dashboard.col_portal"))),
+            state: text_width(ui, header_text(t!("dashboard.col_status"))),
             more_ink: text_width(ui, widgets::icon_text(icon::MORE, 14.0, MUTED)),
         };
         for row in &self.rows {
@@ -322,8 +319,8 @@ impl App {
             let state = match &cells.state {
                 StateCell::Busy(label) => widgets::MARK_SLOT + text_width(ui, RichText::new(label).size(13.0)),
                 StateCell::Text(text, color, _) => text_width(ui, widgets::semibold_text(*text, 13.0, *color)),
-                StateCell::Update => widgets::button_width(ui, UPDATE_LABEL.0, UPDATE_LABEL.1),
-                StateCell::Install => widgets::button_width(ui, INSTALL_LABEL.0, INSTALL_LABEL.1),
+                StateCell::Update => widgets::button_width(ui, UPDATE_LABEL.0, i18n::get(UPDATE_LABEL.1)),
+                StateCell::Install => widgets::button_width(ui, INSTALL_LABEL.0, i18n::get(INSTALL_LABEL.1)),
             };
             c.state = c.state.max(state);
         }
@@ -353,13 +350,13 @@ impl App {
                             }
                         });
                     };
-                    header(ui, TILE + TILE_GAP + name_w, "Balíček", None);
+                    header(ui, TILE + TILE_GAP + name_w, t!("dashboard.col_package"), None);
                     ui.add_space(gap);
-                    header(ui, cols.installed, "Nainstalováno", Some("Datum vydání nainstalovaného balíčku a verze nainstalovaných souborů"));
+                    header(ui, cols.installed, t!("dashboard.col_installed"), Some(t!("dashboard.col_installed_tip")));
                     ui.add_space(gap);
-                    header(ui, cols.portal, "Na portálu", Some("Datum vydání nejnovějšího instalačního balíčku na portálu. Aktualizace se nabízí, když je novější než nainstalovaný."));
+                    header(ui, cols.portal, t!("dashboard.col_portal"), Some(t!("dashboard.col_portal_tip")));
                     ui.add_space(gap);
-                    header(ui, cols.state, "Stav", None);
+                    header(ui, cols.state, t!("dashboard.col_status"), None);
                 });
                 ui.add_space(12.0);
 
@@ -408,13 +405,13 @@ impl App {
                         }
                     }
                     StateCell::Update => {
-                        if widgets::button(ui, UPDATE_LABEL.0, UPDATE_LABEL.1, Btn::Secondary, can_install).clicked() {
+                        if widgets::button(ui, UPDATE_LABEL.0, i18n::get(UPDATE_LABEL.1), Btn::Secondary, can_install).clicked() {
                             self.actions.push(Action::Install(vec![row.key.clone()], false));
                         }
                     }
                     StateCell::Install if editor_missing => {
-                        let resp = widgets::button(ui, INSTALL_LABEL.0, INSTALL_LABEL.1, Btn::Secondary, true)
-                            .on_hover_text("Balíček vyžaduje GeoStore V6. Otevře se Nová instalace s předvybraným editorem a tímto balíčkem.");
+                        let resp = widgets::button(ui, INSTALL_LABEL.0, i18n::get(INSTALL_LABEL.1), Btn::Secondary, true)
+                            .on_hover_text(t!("dashboard.install_needs_editor"));
                         if resp.clicked() {
                             self.sync_wizard();
                             self.wizard.editor = true;
@@ -423,7 +420,7 @@ impl App {
                         }
                     }
                     StateCell::Install => {
-                        if widgets::button(ui, INSTALL_LABEL.0, INSTALL_LABEL.1, Btn::Secondary, can_install).clicked() {
+                        if widgets::button(ui, INSTALL_LABEL.0, i18n::get(INSTALL_LABEL.1), Btn::Secondary, can_install).clicked() {
                             self.actions.push(Action::Ask(Confirm::InstallModule(row.key.clone())));
                         }
                     }
@@ -437,14 +434,14 @@ impl App {
                 let key = row.key.clone();
                 widgets::more_menu(ui, ("row_menu", &key), |ui| {
                     if row.detected && row.latest.is_some() {
-                        if widgets::menu_item(ui, Some(icon::REFRESH), "Přeinstalovat", can_install).clicked() {
+                        if widgets::menu_item(ui, Some(icon::REFRESH), t!("dashboard.reinstall"), can_install).clicked() {
                             self.actions.push(Action::Ask(Confirm::Reinstall(key.clone())));
                         }
                     }
-                    if row.status == Status::UpdateAvailable && widgets::menu_item(ui, Some(icon::CHECK), "Označit jako aktuální", true).clicked() {
+                    if row.status == Status::UpdateAvailable && widgets::menu_item(ui, Some(icon::CHECK), t!("dashboard.mark_current"), true).clicked() {
                         self.actions.push(Action::MarkCurrent(key.clone()));
                     }
-                    let (ic, label) = if tracked { (icon::HIDE, "Přestat sledovat") } else { (icon::VIEW, "Sledovat aktualizace") };
+                    let (ic, label) = if tracked { (icon::HIDE, t!("dashboard.stop_tracking")) } else { (icon::VIEW, t!("dashboard.track")) };
                     if widgets::menu_item(ui, Some(ic), label, true).clicked() {
                         self.actions.push(Action::SetTracked(key.clone(), !tracked));
                     }

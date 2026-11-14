@@ -1,7 +1,9 @@
 use crate::app::App;
 use crate::fmt;
+use crate::i18n;
 use crate::logfile::{self, Level};
 use crate::paths;
+use crate::t;
 use crate::theme::*;
 use crate::widgets::{self, icon, Mark};
 use chrono::{Local, NaiveDate};
@@ -15,12 +17,20 @@ enum Entry {
 fn day_label(d: NaiveDate) -> String {
     let today = Local::now().date_naive();
     if d == today {
-        format!("Dnes · {}", fmt::date(d))
+        t!("history.today", date = fmt::date(d))
     } else if Some(d) == today.pred_opt() {
-        format!("Včera · {}", fmt::date(d))
+        t!("history.yesterday", date = fmt::date(d))
     } else {
         fmt::date(d)
     }
+}
+
+fn all_up_to_date(text: &str) -> bool {
+    i18n::Lang::ALL.iter().any(|&lang| {
+        let full = i18n::fill(i18n::get_in(lang, "log.check_done"), &[("outcome", i18n::get_in(lang, "log.all_up_to_date").to_string())]);
+        let prefix = full.split('{').next().unwrap_or_default();
+        !prefix.is_empty() && text.starts_with(prefix)
+    })
 }
 
 /// Current wording for a log line (older log files used different phrasing); routine lines become Detail.
@@ -33,34 +43,33 @@ fn normalize(level: Level, text: &str) -> (Level, String) {
             .collect();
         if let [total, pending] = nums[..] {
             let outcome = match pending {
-                0 => "vše aktuální".to_string(),
-                1..=4 => format!("k dispozici {pending} aktualizace"),
-                _ => format!("k dispozici {pending} aktualizací"),
+                0 => t!("log.all_up_to_date").to_string(),
+                _ => i18n::fill(i18n::plural("log.updates_available", pending as u64), &[("n", pending.to_string())]),
             };
-            text = format!("Kontrola dokončena: {outcome} ({total} {} na portálu)", fmt::packages(total));
+            text = t!("log.check_done", outcome = outcome, count = total, packages = fmt::packages(total));
         }
     }
-    let routine = text.starts_with("Přihlášen uživatel") || text.starts_with("Kontrola dokončena: vše aktuální");
+    let routine = i18n::starts_with_any(&text, "log.logged_in") || all_up_to_date(&text);
     let level = if routine && level == Level::Info { Level::Detail } else { level };
     (level, text.trim_end_matches('.').to_string())
 }
 
 impl App {
     pub(crate) fn ui_history(&mut self, ui: &mut egui::Ui) {
-        widgets::page_header(ui, "Historie", "", None, |ui| {
-            widgets::menu_button(ui, "history_menu", Some(icon::LOG), "Protokoly", |ui| {
-                if widgets::menu_item(ui, Some(icon::LOG), "Celý protokol aplikace", true).clicked() {
+        widgets::page_header(ui, t!("history.title"), "", None, |ui| {
+            widgets::menu_button(ui, "history_menu", Some(icon::LOG), t!("history.logs"), |ui| {
+                if widgets::menu_item(ui, Some(icon::LOG), t!("history.app_log"), true).clicked() {
                     App::open(logfile::path());
                 }
                 let davka = paths::davka_log();
-                let item = widgets::menu_item(ui, Some(icon::LOG), "Protokol instalátoru", davka.is_file());
+                let item = widgets::menu_item(ui, Some(icon::LOG), t!("history.installer_log"), davka.is_file());
                 if !davka.is_file() {
-                    item.on_hover_text("Instalátor zatím nevytvořil žádný protokol");
+                    item.on_hover_text(t!("history.no_installer_log"));
                 } else if item.clicked() {
                     App::open(davka);
                 }
                 widgets::menu_separator(ui);
-                if widgets::menu_item(ui, Some(icon::FOLDER), "Otevřít složku záloh", true).clicked() {
+                if widgets::menu_item(ui, Some(icon::FOLDER), t!("history.open_backups"), true).clicked() {
                     App::open(paths::BACKUP_ROOT);
                 }
             });
@@ -72,7 +81,7 @@ impl App {
         for (i, l) in self.log.iter().enumerate().rev() {
             let (level, text) = normalize(l.level, &l.text);
             let resolved = level == Level::Error && later_success;
-            later_success |= l.level == Level::Success || text.starts_with("Kontrola dokončena");
+            later_success |= l.level == Level::Success || i18n::starts_with_any(&text, "log.check_done");
             if !self.show_detail && level == Level::Detail {
                 continue;
             }
@@ -95,7 +104,7 @@ impl App {
         widgets::scroll_body(ui, |ui| {
             widgets::card(ui, |ui| {
                 if entries.is_empty() {
-                    let text = if self.log.is_empty() { "Zatím nejsou žádné záznamy" } else { "Žádné instalace ani změny" };
+                    let text = if self.log.is_empty() { t!("history.empty") } else { t!("history.no_changes") };
                     widgets::muted(ui, text);
                 }
                 let footer = 28.0;
@@ -127,12 +136,9 @@ impl App {
                     let mut toggle = false;
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 4.0;
-                        let tip = "Kontroly bez změn, přihlášení a výstup instalačních dávek";
-                        let (text, link) = if self.show_detail {
-                            (format!("Zobrazeno {routine} rutinních záznamů ·"), "Skrýt")
-                        } else {
-                            (format!("Skryto {routine} rutinních záznamů ·"), "Zobrazit")
-                        };
+                        let tip = t!("history.routine_tip");
+                        let (key, link) = if self.show_detail { ("history.routine_shown", t!("history.hide")) } else { ("history.routine_hidden", t!("history.show")) };
+                        let text = format!("{} ·", i18n::fill(i18n::plural(key, routine as u64), &[("n", routine.to_string())]));
                         ui.label(RichText::new(text).size(12.5).color(SUBTLE)).on_hover_text(tip);
                         toggle = ui
                             .add(egui::Button::new(RichText::new(link).size(12.5).color(ACCENT)).frame(false))
@@ -178,7 +184,7 @@ impl App {
             job.append(&format!("×{repeat}"), 8.0, TextFormat { font_id: crate::theme::mono_soft(13.0), color: SUBTLE, ..Default::default() });
         }
         if resolved {
-            job.append("· vyřešeno", 8.0, TextFormat { font_id: FontId::new(13.0, crate::theme::semibold()), color: SUCCESS, ..Default::default() });
+            job.append(&format!("· {}", t!("history.resolved")), 8.0, TextFormat { font_id: FontId::new(13.0, crate::theme::semibold()), color: SUCCESS, ..Default::default() });
         }
         let mut time_job = LayoutJob::default();
         time_job.append(&time, 0.0, TextFormat { font_id: crate::theme::mono_soft(13.0), color: SUBTLE, ..Default::default() });

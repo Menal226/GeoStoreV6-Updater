@@ -1,6 +1,7 @@
 use crate::app::{Action, App, Confirm, Licences};
-use crate::fmt;
+use crate::i18n;
 use crate::logic::{PackageRow, Status};
+use crate::t;
 use crate::theme::*;
 use crate::widgets::{self, icon, Btn};
 use crate::worker::{CleanPlan, Cmd};
@@ -64,8 +65,8 @@ impl App {
             return None;
         }
         match &self.licences {
-            Licences::Idle | Licences::Loading => Some("Načítám licence ze systému licman…"),
-            Licences::Failed(_) => Some("Licence se nepodařilo načíst"),
+            Licences::Idle | Licences::Loading => Some(t!("wizard.licences_loading")),
+            Licences::Failed(_) => Some(t!("wizard.licences_failed")),
             Licences::Ready(_) => None,
         }
     }
@@ -75,19 +76,19 @@ impl App {
             Licences::Idle | Licences::Loading => {
                 ui.horizontal(|ui| {
                     widgets::spinner(ui, 14.0);
-                    ui.label(RichText::new("Načítám licence ze systému licman…").size(13.0).color(MUTED));
+                    ui.label(RichText::new(t!("wizard.licences_loading")).size(13.0).color(MUTED));
                 });
             }
             Licences::Failed(e) => {
                 let e = e.clone();
-                ui.add(egui::Label::new(RichText::new(format!("Seznam licencí se nepodařilo načíst: {e}")).size(13.0).color(WARN)).wrap());
+                ui.add(egui::Label::new(RichText::new(t!("wizard.licences_failed_detail", error = e)).size(13.0).color(WARN)).wrap());
                 ui.add_space(8.0);
-                if widgets::button(ui, Some(icon::REFRESH), "Zkusit znovu", Btn::Secondary, true).clicked() {
+                if widgets::button(ui, Some(icon::REFRESH), t!("wizard.retry"), Btn::Secondary, true).clicked() {
                     self.licences = Licences::Idle;
                 }
             }
             Licences::Ready(list) if list.is_empty() => {
-                ui.label(RichText::new("K účtu není v systému licman vygenerována žádná plovoucí licence GeoStore V6.").size(13.0).color(WARN));
+                ui.label(RichText::new(t!("wizard.no_licences")).size(13.0).color(WARN));
             }
             Licences::Ready(list) if list.len() == 1 => {
                 let l = &list[0];
@@ -98,8 +99,8 @@ impl App {
             Licences::Ready(list) => {
                 let list = list.clone();
                 let n = list.len();
-                let noun = if n <= 4 { "licence" } else { "licencí" };
-                ui.label(RichText::new(format!("K účtu jsou {n} {noun}, do počítače se uloží jen jedna. Vyberte kterou:")).size(13.0).color(if enabled { MUTED } else { DISABLED_TEXT }));
+                let text = i18n::fill(i18n::plural("wizard.choose_licence", n as u64), &[("n", n.to_string())]);
+                ui.label(RichText::new(text).size(13.0).color(if enabled { MUTED } else { DISABLED_TEXT }));
                 for l in &list {
                     ui.add_space(8.0);
                     let selected = self.wizard.licence_guid.as_deref() == Some(l.guid.as_str());
@@ -120,8 +121,8 @@ impl App {
             widgets::checkbox(ui, checked, widgets::semibold_text(name, 14.0, if enabled { TEXT } else { DISABLED_TEXT }), enabled);
             if row.detected {
                 let (text, color) = match row.status {
-                    Status::UpdateAvailable => ("Nainstalováno, na portálu je novější", DANGER),
-                    _ => ("Nainstalováno, aktuální", SUCCESS),
+                    Status::UpdateAvailable => (t!("wizard.installed_outdated"), DANGER),
+                    _ => (t!("wizard.installed_current"), SUCCESS),
                 };
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     ui.label(widgets::semibold_text(text, 13.0, color));
@@ -139,7 +140,7 @@ impl App {
         }
         widgets::page_header(
             ui,
-            "Nová instalace",
+            t!("wizard.title"),
             "",
             None,
             |_| {},
@@ -160,28 +161,23 @@ impl App {
                         let summary = if let Some(b) = blocker {
                             b.to_string()
                         } else if plan.is_empty() {
-                            "Vyberte alespoň jednu položku".to_string()
+                            t!("wizard.select_one").to_string()
                         } else {
                             let n = plan.modules.len() + usize::from(plan.editor);
                             let extras = usize::from(plan.hasp) + usize::from(plan.vcredist) + usize::from(plan.licence.is_some());
-                            let verb = match n {
-                                1 => "Vybrán",
-                                2..=4 => "Vybrány",
-                                _ => "Vybráno",
-                            };
-                            let extras_text = format!("{extras} {}", if extras == 1 { "doplněk" } else { "doplňky" });
+                            let count = |key: &'static str, n: usize| i18n::fill(i18n::plural(key, n as u64), &[("n", n.to_string())]);
                             if n == 0 {
-                                format!("{} {extras_text}", if extras == 1 { "Vybrán" } else { "Vybrány" })
+                                count("wizard.selected_extras", extras)
                             } else if extras > 0 {
-                                format!("{verb} {n} {} · {extras_text}", fmt::packages(n))
+                                t!("wizard.selected_both", packages = count("wizard.selected_packages", n), extras = count("wizard.extras_count", extras))
                             } else {
-                                format!("{verb} {n} {}", fmt::packages(n))
+                                count("wizard.selected_packages", n)
                             }
                         };
                         ui.label(RichText::new(summary).size(14.0).color(MUTED));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let ok = !plan.is_empty() && can_install && blocker.is_none();
-                            if widgets::button(ui, Some(icon::PLAY), "Spustit instalaci", Btn::Primary, ok).clicked() {
+                            if widgets::button(ui, Some(icon::PLAY), t!("wizard.start"), Btn::Primary, ok).clicked() {
                                 self.actions.push(Action::Ask(Confirm::CleanInstall(plan.clone())));
                             }
                         });
@@ -212,7 +208,7 @@ impl App {
                     if self.checking {
                         widgets::spinner(ui, 16.0);
                     }
-                    ui.label(RichText::new("Seznam balíčků se načítá z portálu…").color(MUTED));
+                    ui.label(RichText::new(t!("wizard.loading_packages")).color(MUTED));
                 });
             });
             return;
@@ -222,18 +218,18 @@ impl App {
         let editor_row = self.rows.iter().find(|r| r.is_editor()).cloned();
 
         widgets::card(ui, |ui| {
-            widgets::card_title(ui, "1. Grafický editor");
+            widgets::card_title(ui, t!("wizard.editor.title"));
             ui.add_space(12.0);
             match &editor_row {
                 Some(row) if row.latest.is_some() => {
                     App::wizard_item(ui, &mut self.wizard.editor, enabled, "GeoStore V6", row);
                     if row.detected {
                         widgets::indented(ui, |ui| {
-                            widgets::muted(ui, "Při výběru se editor odinstaluje a nainstaluje znovu.");
+                            widgets::muted(ui, t!("wizard.editor.reinstall_note"));
                         });
                     }
                 }
-                _ => widgets::muted(ui, "Instalační balíček editoru nebyl na portálu nalezen"),
+                _ => widgets::muted(ui, t!("wizard.editor.not_found")),
             }
         });
         ui.add_space(12.0);
@@ -241,10 +237,10 @@ impl App {
         let modules: Vec<_> = self.rows.iter().filter(|r| !r.is_editor()).cloned().collect();
         widgets::card(ui, |ui| {
             ui.horizontal(|ui| {
-                widgets::card_title(ui, "2. Aplikační řešení");
+                widgets::card_title(ui, t!("wizard.modules.title"));
                 let all = modules.iter().all(|r| self.wizard.modules.get(&r.key).copied().unwrap_or(false));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let text = if all { "Zrušit výběr" } else { "Vybrat vše" };
+                    let text = if all { t!("wizard.modules.deselect_all") } else { t!("wizard.modules.select_all") };
                     let link = ui.add_enabled(enabled, egui::Button::new(RichText::new(text).size(13.0).color(ACCENT)).frame(false));
                     if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                         for r in &modules {
@@ -272,12 +268,12 @@ impl App {
         ui.add_space(12.0);
 
         widgets::card(ui, |ui| {
-            widgets::card_title(ui, "3. Doplňky");
+            widgets::card_title(ui, t!("wizard.extras.title"));
             ui.add_space(12.0);
             widgets::checkbox(
                 ui,
                 &mut self.wizard.hasp,
-                RichText::new("Nainstalovat ovladač hardwarového klíče (Sentinel HASP)").size(14.0),
+                RichText::new(t!("wizard.extras.hasp")).size(14.0),
                 enabled,
             );
             ui.add_space(12.0);
@@ -285,21 +281,21 @@ impl App {
             let vc = widgets::checkbox(
                 ui,
                 &mut self.wizard.vcredist,
-                RichText::new("Doinstalovat Microsoft Visual C++ 2010 a 2012 (x64)").size(14.0),
+                RichText::new(t!("wizard.extras.vcredist")).size(14.0),
                 vc_enabled,
             );
             if !self.wizard.editor {
-                vc.on_hover_text("Dostupné jen při instalaci editoru");
+                vc.on_hover_text(t!("wizard.extras.vcredist_hint"));
             }
             ui.add_space(12.0);
             let lic_enabled = enabled && self.licence_possible() && !self.no_licences();
             let mut lic_on = self.wizard.licence && !self.no_licences();
-            let lic = widgets::checkbox(ui, &mut lic_on, RichText::new("Stáhnout plovoucí licenci (gsfl.lic)").size(14.0), lic_enabled);
+            let lic = widgets::checkbox(ui, &mut lic_on, RichText::new(t!("wizard.extras.licence")).size(14.0), lic_enabled);
             if lic.changed() {
                 self.wizard.licence = lic_on;
             }
             if !self.licence_possible() {
-                lic.on_hover_text("Dostupné jen s nainstalovaným nebo vybraným editorem");
+                lic.on_hover_text(t!("wizard.extras.licence_hint"));
             } else {
                 widgets::indented(ui, |ui| {
                     ui.add_space(8.0);

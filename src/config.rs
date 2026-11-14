@@ -1,3 +1,4 @@
+use crate::i18n::Lang;
 use crate::paths;
 use chrono::{DateTime, Local, NaiveDate};
 use serde::de::DeserializeOwned;
@@ -21,6 +22,7 @@ pub struct Config {
     pub remember_login: bool,
     pub last_user: String,
     pub tracked: BTreeMap<String, bool>,
+    pub language: Option<Lang>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -44,6 +46,7 @@ impl Default for Config {
             remember_login: true,
             last_user: String::new(),
             tracked: BTreeMap::new(),
+            language: None,
         }
     }
 }
@@ -55,6 +58,11 @@ impl Config {
 
     pub fn save(&self) {
         save_json(&paths::data_dir().join("config.json"), self);
+    }
+
+    /// The chosen language, or the system one until someone picks.
+    pub fn lang(&self) -> Lang {
+        self.language.unwrap_or_else(Lang::system)
     }
 
     pub fn is_tracked(&self, key: &str, detected: bool) -> bool {

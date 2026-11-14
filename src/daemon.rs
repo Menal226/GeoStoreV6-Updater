@@ -1,8 +1,8 @@
 use crate::config::{Config, State};
 use crate::logfile::{self, Level};
 use crate::logic::{self, PackageRow};
-use crate::worker::{self, Cmd, Event, InstallOptions};
-use crate::{creds, fmt, local, paths, selfupdate};
+use crate::worker::{self, Cmd, Event, InstallOptions, Outcome};
+use crate::{creds, fmt, i18n, local, paths, selfupdate, t};
 use chrono::Local;
 use std::fs::{File, OpenOptions};
 use std::os::windows::fs::OpenOptionsExt;
@@ -142,15 +142,15 @@ fn status_tip(cfg: &Config, activity: &str, no_creds: bool) -> String {
     let line = if !activity.is_empty() {
         activity.to_string()
     } else if !cfg.auto_check {
-        "Automatická kontrola je vypnutá".to_string()
+        t!("tray.auto_check_off").to_string()
     } else if no_creds {
-        "Pro automatickou kontrolu uložte přihlášení".to_string()
+        t!("tray.save_signin").to_string()
     } else {
         let next = cfg.next_check(State::load().last_auto_check);
         if next <= Local::now() {
-            "Kontrola proběhne za chvíli".to_string()
+            t!("tray.check_soon").to_string()
         } else {
-            format!("Další kontrola {}", fmt::datetime(next))
+            t!("tray.next_check", when = fmt::datetime(next))
         }
     };
     format!("GeoStore Updater\n{line}")
@@ -187,6 +187,7 @@ fn scheduler() {
         if forced || last_evaluated.is_none_or(|t| t.elapsed() >= EVALUATE_EVERY) {
             last_evaluated = Some(Instant::now());
             let cfg = Config::load();
+            crate::i18n::set(cfg.lang());
             let no_creds = !creds::exists();
             let due = cfg.auto_check
                 && !no_creds
@@ -194,16 +195,16 @@ fn scheduler() {
                 && retry_at.is_none_or(|t| Instant::now() >= t)
                 && !worker::operation_running();
             if forced && no_creds {
-                toast("Kontrola aktualizací není možná", "Otevřete GeoStore Updater a uložte přihlášení k portálu.");
+                toast(t!("tray.check_unavailable"), t!("tray.no_creds_body"));
             } else if forced && worker::operation_running() {
-                toast("Kontrola aktualizací není možná", "Právě probíhá instalace aktualizací.");
+                toast(t!("tray.check_unavailable"), t!("tray.installing_body"));
             } else if forced || due {
                 match check(&cfg, forced, &mut announced) {
                     Ok(()) => retry_at = None,
                     Err(e) => {
                         retry_at = Some(Instant::now() + RETRY_AFTER);
                         if forced {
-                            toast("Kontrola aktualizací selhala", e);
+                            toast(t!("tray.check_failed"), e);
                         }
                     }
                 }
@@ -216,7 +217,7 @@ fn scheduler() {
 
 fn check(cfg: &Config, forced: bool, announced: &mut Vec<String>) -> Result<(), String> {
     let Some((user, pass)) = creds::load() else { return Ok(()) };
-    set_tip(status_tip(cfg, "Kontroluji aktualizace…", false));
+    set_tip(status_tip(cfg, t!("tray.checking"), false));
     let (tx, rx, _cancel) = worker::spawn(None);
     let _ = tx.send(Cmd::Login { user, pass, remember: true });
     let rows = loop {
@@ -225,8 +226,8 @@ fn check(cfg: &Config, forced: bool, announced: &mut Vec<String>) -> Result<(), 
             Ok(Event::LoginFailed(e)) | Ok(Event::CheckFailed(e)) => return Err(e),
             Ok(_) => {}
             Err(_) => {
-                let msg = "Portál neodpověděl včas.".to_string();
-                logfile::write(Level::Error, &format!("Automatická kontrola selhala: {msg}"));
+                let msg = t!("tray.timeout").to_string();
+                logfile::write(Level::Error, &t!("tray.auto_check_failed", error = msg));
                 return Err(msg);
             }
         }
@@ -237,7 +238,7 @@ fn check(cfg: &Config, forced: bool, announced: &mut Vec<String>) -> Result<(), 
     if pending.is_empty() {
         announced.clear();
         if forced {
-            toast("GeoStore V6 je aktuální", "Všechny sledované balíčky jsou aktuální.");
+            toast(t!("tray.up_to_date"), t!("tray.all_tracked_current"));
         }
         return Ok(());
     }
@@ -256,12 +257,9 @@ fn check(cfg: &Config, forced: bool, announced: &mut Vec<String>) -> Result<(), 
         .collect();
     if forced || signature != *announced {
         *announced = signature;
-        let title = match pending.len() {
-            1 => "K dispozici je aktualizace GeoStore V6".to_string(),
-            n @ 2..=4 => format!("K dispozici jsou {n} aktualizace GeoStore V6"),
-            n => format!("K dispozici je {n} aktualizací GeoStore V6"),
-        };
-        toast(title, format!("{names}\nKliknutím otevřete GeoStore Updater."));
+        let n = pending.len();
+        let title = i18n::fill(i18n::plural("tray.updates_available", n as u64), &[("n", n.to_string())]);
+        toast(title, t!("tray.click_to_open", names = names));
     }
     Ok(())
 }
@@ -275,7 +273,7 @@ fn names(rows: &[PackageRow], keys: &[String]) -> String {
 
 fn install(cfg: &Config, rows: &[PackageRow], keys: Vec<String>, names: &str, tx: &std::sync::mpsc::Sender<Cmd>, rx: &Receiver<Event>) {
     SHARED.installing.store(true, Ordering::SeqCst);
-    set_tip(status_tip(cfg, "Instaluji aktualizace…", false));
+    set_tip(status_tip(cfg, t!("tray.installing"), false));
     let opts = InstallOptions {
         backup: cfg.backup_konfig,
         keep_downloads: cfg.keep_downloads,
@@ -288,16 +286,16 @@ fn install(cfg: &Config, rows: &[PackageRow], keys: Vec<String>, names: &str, tx
         match ev {
             Event::WaitingForGeoStore(true) if !warned => {
                 warned = true;
-                set_tip(status_tip(cfg, "Instalace čeká na ukončení GeoStore V6", false));
-                toast("Aktualizace čekají na ukončení GeoStore V6", "Uložte práci a zavřete GeoStore V6. Instalace potom automaticky pokračuje.");
+                set_tip(status_tip(cfg, t!("tray.waiting_tip"), false));
+                toast(t!("tray.waiting_title"), t!("tray.waiting_body"));
             }
-            Event::OpFinished { ok, summary } => {
-                if ok {
-                    toast("Aktualizace nainstalovány", names);
-                } else if summary.starts_with("Instalace byla dokončena") {
-                    toast("Aktualizace nainstalovány s upozorněním", "Podrobnosti najdete v historii aplikace GeoStore Updater.");
+            Event::OpFinished { outcome, summary } => {
+                if outcome == Outcome::Success {
+                    toast(t!("tray.installed"), names);
+                } else if outcome == Outcome::Warnings {
+                    toast(t!("tray.installed_warnings"), t!("tray.see_history"));
                 } else {
-                    toast("Instalace aktualizací se nezdařila", summary);
+                    toast(t!("tray.install_failed"), summary);
                 }
                 break;
             }
@@ -371,10 +369,13 @@ unsafe fn show_menu(hwnd: HWND) {
     let Ok(menu) = CreatePopupMenu() else { return };
     let installing = SHARED.installing.load(Ordering::SeqCst);
     let busy = if installing { MF_STRING | MF_GRAYED } else { MF_STRING };
-    let _ = AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Otevřít GeoStore Updater"));
-    let _ = AppendMenuW(menu, busy, ID_CHECK, w!("Zkontrolovat aktualizace"));
+    let open = local::wide(t!("tray.open"));
+    let check = local::wide(t!("tray.check"));
+    let exit = local::wide(t!("tray.exit"));
+    let _ = AppendMenuW(menu, MF_STRING, ID_OPEN, PCWSTR(open.as_ptr()));
+    let _ = AppendMenuW(menu, busy, ID_CHECK, PCWSTR(check.as_ptr()));
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-    let _ = AppendMenuW(menu, busy, ID_EXIT, w!("Ukončit"));
+    let _ = AppendMenuW(menu, busy, ID_EXIT, PCWSTR(exit.as_ptr()));
     let mut pt = POINT::default();
     let _ = GetCursorPos(&mut pt);
     let _ = SetForegroundWindow(hwnd);

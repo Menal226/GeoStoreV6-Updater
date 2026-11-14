@@ -1,20 +1,23 @@
+use crate::i18n::{self, Lang};
+use crate::t;
 use chrono::{DateTime, Local, NaiveDate};
 
 pub fn date(d: NaiveDate) -> String {
-    d.format("%d.%m.%Y").to_string()
+    d.format(t!("fmt.date_format")).to_string()
 }
 
 pub fn datetime(dt: DateTime<Local>) -> String {
     let today = Local::now().date_naive();
     let d = dt.date_naive();
+    let time = dt.format("%H:%M");
     if d == today {
-        format!("dnes v {}", dt.format("%H:%M"))
+        t!("fmt.today_at", time = time)
     } else if Some(d) == today.pred_opt() {
-        format!("včera v {}", dt.format("%H:%M"))
+        t!("fmt.yesterday_at", time = time)
     } else if Some(d) == today.succ_opt() {
-        format!("zítra v {}", dt.format("%H:%M"))
+        t!("fmt.tomorrow_at", time = time)
     } else {
-        format!("{} v {}", date(d), dt.format("%H:%M"))
+        t!("fmt.date_at", date = date(d), time = time)
     }
 }
 
@@ -22,8 +25,10 @@ pub fn mb(bytes: u64) -> String {
     let v = bytes as f64 / 1_048_576.0;
     if v >= 100.0 {
         format!("{v:.0} MB")
-    } else {
+    } else if i18n::current() == Lang::Cs {
         format!("{v:.1} MB").replace('.', ",")
+    } else {
+        format!("{v:.1} MB")
     }
 }
 
@@ -36,9 +41,5 @@ pub fn duration(secs: u64) -> String {
 }
 
 pub fn packages(n: usize) -> &'static str {
-    match n {
-        1 => "balíček",
-        2..=4 => "balíčky",
-        _ => "balíčků",
-    }
+    i18n::plural("fmt.packages", n as u64)
 }

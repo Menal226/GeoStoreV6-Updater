@@ -2,6 +2,7 @@ use crate::config::Manifest;
 use crate::local;
 use crate::paths;
 use crate::portal::Cancelled;
+use crate::t;
 use anyhow::{bail, Context, Result};
 use chrono::{Local, NaiveDate, TimeZone};
 use std::fs::{self, File};
@@ -36,9 +37,9 @@ pub fn extract(
     remove_dir(dest);
     fs::create_dir_all(dest)?;
     let file = File::open(zip_path)
-        .with_context(|| format!("Nelze otevřít {}", zip_path.display()))?;
+        .with_context(|| t!("installer.open_failed", path = zip_path.display()))?;
     let mut archive = zip::ZipArchive::new(BufReader::new(file))
-        .context("Stažený soubor není platný ZIP archiv")?;
+        .context(t!("installer.bad_zip"))?;
     let total = archive.len();
     for i in 0..total {
         if cancel.load(Ordering::Relaxed) {
@@ -59,7 +60,7 @@ pub fn extract(
         {
             let mut f = BufWriter::new(File::create(&out)?);
             std::io::copy(&mut entry, &mut f)
-                .with_context(|| format!("Chyba při rozbalování {}", out.display()))?;
+                .with_context(|| t!("installer.extract_failed", path = out.display()))?;
         }
         if let Some(dt) = entry.last_modified() {
             if let Some(ts) = zip_time(&dt) {
@@ -175,7 +176,7 @@ pub fn scan_konfig(
                             fs::create_dir_all(parent)?;
                         }
                         fs::copy(&local, &target).with_context(|| {
-                            format!("Nelze zálohovat {}", local.display())
+                            t!("installer.backup_failed", path = local.display())
                         })?;
                         backed_up += 1;
                     }
@@ -199,7 +200,7 @@ fn find_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// Writes an unattended copy of the package's davka.bat (Windows-1250 bytes are kept as they are).
 pub fn prepare_davka(root: &Path) -> Result<PathBuf> {
-    let original = fs::read(root.join("davka.bat")).context("V balíčku chybí davka.bat")?;
+    let original = fs::read(root.join("davka.bat")).context(t!("installer.no_davka"))?;
 
     let desktop = local::desktop_dir();
     let default_desktop = PathBuf::from(local::expand_env(r"%USERPROFILE%\Desktop"));
@@ -269,7 +270,7 @@ fn parse_robocopy(line: &str, out: &mut DavkaOutcome) {
 }
 
 pub fn run_davka(root: &Path, bat: &Path, mut on_line: impl FnMut(String)) -> Result<DavkaOutcome> {
-    let name = bat.file_name().context("Neplatná cesta k dávce")?;
+    let name = bat.file_name().context(t!("installer.bad_bat_path"))?;
     let mut child = Command::new("cmd.exe")
         .arg("/d")
         .arg("/c")
@@ -280,7 +281,7 @@ pub fn run_davka(root: &Path, bat: &Path, mut on_line: impl FnMut(String)) -> Re
         .stderr(Stdio::piped())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .context("Nelze spustit instalační dávku")?;
+        .context(t!("installer.davka_start_failed"))?;
 
     let stderr = child.stderr.take().context("stderr")?;
     let (tx, rx) = mpsc::channel::<String>();
@@ -330,15 +331,11 @@ pub fn msi_uninstall(product_code: &str) -> Result<()> {
         .arg(&log)
         .creation_flags(CREATE_NO_WINDOW)
         .status()
-        .context("Nelze spustit msiexec")?;
+        .context(t!("installer.msiexec_failed"))?;
     match status.code() {
         Some(0) | Some(1605) | Some(3010) | Some(1641) => Ok(()),
-        Some(1618) => bail!("Právě probíhá jiná instalace Windows. Počkejte na její dokončení a zkuste to znovu."),
-        code => bail!(
-            "Odinstalace předchozí verze GeoStore V6 selhala (kód {}). Podrobnosti: {}",
-            code.unwrap_or(-1),
-            log.display()
-        ),
+        Some(1618) => bail!(t!("installer.another_install")),
+        code => bail!(t!("installer.uninstall_failed", code = code.unwrap_or(-1), log = log.display())),
     }
 }
 
@@ -351,16 +348,12 @@ pub fn msi_install(msi: &Path) -> Result<bool> {
         .arg(&log)
         .creation_flags(CREATE_NO_WINDOW)
         .status()
-        .context("Nelze spustit msiexec")?;
+        .context(t!("installer.msiexec_failed"))?;
     match status.code() {
         Some(0) => Ok(false),
         Some(3010) | Some(1641) => Ok(true),
-        Some(1618) => bail!("Právě probíhá jiná instalace Windows. Počkejte na její dokončení a zkuste to znovu."),
-        code => bail!(
-            "Instalace GeoStore V6 selhala (kód {}). Podrobnosti: {}",
-            code.unwrap_or(-1),
-            log.display()
-        ),
+        Some(1618) => bail!(t!("installer.another_install")),
+        code => bail!(t!("installer.install_failed", code = code.unwrap_or(-1), log = log.display())),
     }
 }
 
@@ -373,16 +366,16 @@ pub fn run_vcredist(mut log: impl FnMut(String)) {
     for (file, args) in items {
         let exe = redist.join(file);
         if !exe.is_file() {
-            log(format!("{file} nebyl v {} nalezen.", redist.display()));
+            log(t!("installer.vc_not_found", file = file, dir = redist.display()));
             continue;
         }
         match Command::new(&exe).args(&args).creation_flags(CREATE_NO_WINDOW).status() {
             Ok(s) => match s.code() {
-                Some(0) | Some(3010) => log(format!("{file}: nainstalováno.")),
-                Some(1638) | Some(5100) => log(format!("{file}: novější verze je již nainstalována.")),
-                c => log(format!("{file}: instalátor skončil s kódem {}.", c.unwrap_or(-1))),
+                Some(0) | Some(3010) => log(t!("installer.vc_installed", file = file)),
+                Some(1638) | Some(5100) => log(t!("installer.vc_newer", file = file)),
+                c => log(t!("installer.vc_exit", file = file, code = c.unwrap_or(-1))),
             },
-            Err(e) => log(format!("{file}: nelze spustit ({e}).")),
+            Err(e) => log(t!("installer.vc_start_failed", file = file, error = e)),
         }
     }
 }
@@ -406,7 +399,7 @@ pub fn run_interactive(exe: &Path) -> Result<i32> {
     let status = Command::new(exe)
         .current_dir(exe.parent().unwrap_or(Path::new(".")))
         .status()
-        .with_context(|| format!("Nelze spustit {}", exe.display()))?;
+        .with_context(|| t!("installer.run_failed", path = exe.display()))?;
     Ok(status.code().unwrap_or(-1))
 }
 
