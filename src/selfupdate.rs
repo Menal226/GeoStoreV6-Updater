@@ -44,7 +44,7 @@ fn staged_path() -> PathBuf {
 
 /// True once a newer version has replaced the program on disk.
 pub fn run() -> bool {
-    if cfg!(debug_assertions) {
+    if cfg!(debug_assertions) || !cfg!(feature = "self-update") {
         return false;
     }
     match update() {

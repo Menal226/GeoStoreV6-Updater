@@ -9,6 +9,10 @@ build = "build.rs"
 name = "GeoStoreUpdater"
 path = "src/main.rs"
 
+[features]
+default = ["self-update"]
+self-update = []
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
