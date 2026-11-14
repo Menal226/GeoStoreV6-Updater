@@ -76,6 +76,19 @@ pub struct Licence {
 }
 
 impl Licence {
+    pub fn sample(guid: &str, project: &str, float_max: &str, float_used: &str, valid_to: &str) -> Self {
+        Self {
+            guid: guid.into(),
+            project: project.into(),
+            company: String::new(),
+            float_max: float_max.into(),
+            float_used: float_used.into(),
+            valid_to: valid_to.into(),
+            trial: false,
+            code: String::new(),
+        }
+    }
+
     pub fn title(&self) -> String {
         if self.project.is_empty() { t!("portal.licence_title").into() } else { self.project.clone() }
     }

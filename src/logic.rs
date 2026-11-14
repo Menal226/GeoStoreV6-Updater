@@ -49,6 +49,28 @@ fn keep_newest(slot: &mut Option<RemoteFile>, f: &RemoteFile) {
 }
 
 pub fn compute_rows(files: &[RemoteFile], state: &State) -> Vec<PackageRow> {
+    let davka = DavkaLog::read();
+    let editor = local::editor_info();
+    compute_rows_with(files, state, |key, info| {
+        if key == EDITOR {
+            (
+                editor.installed,
+                editor.exe_version.clone().or_else(|| editor.display_version.clone()),
+                editor.install_date.max(editor.exe_date),
+            )
+        } else {
+            let m = local::detect_module(info, &davka);
+            (m.detected, m.version, m.evidence)
+        }
+    })
+}
+
+/// `detect` says whether a package is installed, its version and the date of its files.
+pub fn compute_rows_with(
+    files: &[RemoteFile],
+    state: &State,
+    detect: impl Fn(&str, &catalog::ModuleInfo) -> (bool, Option<String>, Option<NaiveDate>),
+) -> Vec<PackageRow> {
     let mut groups: BTreeMap<String, Group> = BTreeMap::new();
     for f in files {
         if let Some((key, variant)) = catalog::classify(&f.title) {
@@ -61,23 +83,12 @@ pub fn compute_rows(files: &[RemoteFile], state: &State) -> Vec<PackageRow> {
         }
     }
 
-    let davka = DavkaLog::read();
-    let editor = local::editor_info();
     let mut rows = Vec::new();
     for (key, g) in groups {
         let info = catalog::module_info(&key);
         let latest = g.partial.clone().or_else(|| g.single.clone()).or_else(|| g.complete.clone());
         let complete = g.complete.or(g.single);
-        let (detected, local_version, evidence) = if key == EDITOR {
-            (
-                editor.installed,
-                editor.exe_version.clone().or_else(|| editor.display_version.clone()),
-                editor.install_date.max(editor.exe_date),
-            )
-        } else {
-            let m = local::detect_module(&info, &davka);
-            (m.detected, m.version, m.evidence)
-        };
+        let (detected, local_version, evidence) = detect(&key, &info);
         let record = state.packages.get(&key).filter(|_| detected);
         let (installed_date, from_state) = match record {
             Some(r) => (Some(r.portal_date), true),

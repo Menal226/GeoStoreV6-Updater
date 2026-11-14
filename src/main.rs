@@ -5,6 +5,7 @@ mod catalog;
 mod config;
 mod creds;
 mod daemon;
+mod demo;
 mod fmt;
 mod i18n;
 mod installer;

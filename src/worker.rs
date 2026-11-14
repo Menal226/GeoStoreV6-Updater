@@ -147,6 +147,7 @@ pub fn spawn(ctx: Option<eframe::egui::Context>) -> (Sender<Cmd>, Receiver<Event
                 portal: None,
                 files: Vec::new(),
                 state: State::load(),
+                demo: None,
             };
             while let Ok(cmd) = cmd_rx.recv() {
                 w.handle(cmd);
@@ -188,6 +189,7 @@ struct Worker {
     portal: Option<Portal>,
     files: Vec<RemoteFile>,
     state: State,
+    demo: Option<crate::demo::Demo>,
 }
 
 /// Held while packages are being installed, so the window and the tray process never install at the same time.
@@ -247,6 +249,7 @@ impl Worker {
             Cmd::Login { user, pass, remember } => self.login(user, pass, remember),
             Cmd::Logout => {
                 self.portal = None;
+                self.demo = None;
                 self.files.clear();
                 crate::creds::delete();
                 crate::creds::delete_licman();
@@ -264,6 +267,9 @@ impl Worker {
                 self.run_operation(false, jobs, opts, extras);
             }
             Cmd::Licences => self.send_licences(),
+            Cmd::LicmanLogin { user, .. } if self.demo.is_some() => {
+                self.em.send(Event::Licences { result: Ok(crate::demo::licences()), account: Some(user) });
+            }
             Cmd::LicmanLogin { user, pass } => {
                 let result = Portal::licman().and_then(|mut l| {
                     l.login(&user, &pass).context(t!("worker.licman_login_failed_account", user = user))?;
@@ -284,6 +290,9 @@ impl Worker {
                     }
                 }
             }
+            Cmd::LicmanReset if self.demo.is_some() => {
+                self.em.send(Event::Licences { result: Ok(crate::demo::licences()), account: None });
+            }
             Cmd::LicmanReset => {
                 crate::creds::delete_licman();
                 self.send_licences();
@@ -291,7 +300,10 @@ impl Worker {
             Cmd::MarkCurrent(key) => {
                 if let Some(row) = self.rows().into_iter().find(|r| r.key == key) {
                     if let Some(f) = &row.latest {
-                        self.record(&key, f, row.local_version.clone(), false);
+                        match &mut self.demo {
+                            Some(demo) => demo.install(&key, f.date),
+                            None => self.record(&key, f, row.local_version.clone(), false),
+                        }
                         self.em.log(
                             Level::Info,
                             t!("worker.marked_current", name = row.info.name, date = fmt::date(f.date)),
@@ -304,6 +316,19 @@ impl Worker {
     }
 
     fn login(&mut self, user: String, pass: String, remember: bool) {
+        if crate::demo::is_demo(&user, &pass) {
+            if remember {
+                if let Err(e) = crate::creds::save(&user, &pass) {
+                    self.em.log(Level::Warn, t!("worker.creds_save_failed", error = e));
+                }
+            }
+            self.portal = None;
+            self.demo = Some(crate::demo::Demo::new());
+            self.em.log(Level::Detail, t!("log.logged_in", name = user.trim(), roles = t!("worker.demo_role")));
+            self.em.send(Event::LoggedIn { user: user.trim().to_string() });
+            self.check();
+            return;
+        }
         let result = portal_lock().and_then(|_lock| Portal::new().and_then(|mut p| p.login(&user, &pass).map(|_| p)));
         match result {
             Ok(p) => {
@@ -333,7 +358,8 @@ impl Worker {
 
     fn check(&mut self) {
         self.em.send(Event::Checking);
-        match self.with_portal(|p, _| p.list_files()) {
+        let result = if self.demo.is_some() { Ok(crate::demo::files()) } else { self.with_portal(|p, _| p.list_files()) };
+        match result {
             Ok(files) => {
                 self.files = files;
                 self.state = State::update(|s| s.last_check = Some(Local::now()));
@@ -360,7 +386,10 @@ impl Worker {
     }
 
     fn rows(&self) -> Vec<PackageRow> {
-        logic::compute_rows(&self.files, &self.state)
+        match &self.demo {
+            Some(demo) => logic::compute_rows_with(&self.files, &State::default(), |key, _| demo.detect(key)),
+            None => logic::compute_rows(&self.files, &self.state),
+        }
     }
 
     fn emit_overview(&self) {
@@ -445,6 +474,7 @@ impl Worker {
             Err(anyhow!(t!("worker.nothing_selected")))
         } else {
             match operation_lock() {
+                Some(_lock) if self.demo.is_some() => self.run_demo_jobs(jobs),
                 Some(_lock) => self.run_jobs(jobs, &opts, extras),
                 None => Err(anyhow!(t!("worker.other_running"))),
             }
@@ -591,6 +621,46 @@ impl Worker {
         Ok(report)
     }
 
+    /// The test account's installation: progress like a real one, but nothing is downloaded or changed on the computer.
+    fn run_demo_jobs(&mut self, jobs: Vec<Job>) -> Result<Report> {
+        let mut report = Report::default();
+        let steps = jobs.len().max(1);
+        for (i, job) in jobs.iter().enumerate() {
+            let step = i + 1;
+            self.em.log(Level::Info, format!("{} – {} ({})", job.name, job.file.title, fmt::date(job.file.date)));
+            let stages = [
+                (StageKind::Download, t!("worker.stage_download", file = job.file.title), 20),
+                (StageKind::Extract, t!("worker.stage_extract").to_string(), 6),
+                (StageKind::Other, t!("worker.demo_stage_install").to_string(), 8),
+            ];
+            for (kind, stage, ticks) in stages {
+                for n in 0..=ticks {
+                    if self.cancel.load(Ordering::Relaxed) {
+                        return Err(Cancelled.into());
+                    }
+                    self.em.send(Event::Progress(Progress {
+                        kind,
+                        step,
+                        steps,
+                        package: job.name.clone(),
+                        stage: stage.clone(),
+                        fraction: Some(n as f32 / ticks as f32),
+                        detail: String::new(),
+                        cancellable: true,
+                    }));
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+            if let Some(demo) = &mut self.demo {
+                demo.install(&job.key, job.file.date);
+            }
+            report.lines.push(t!("worker.demo_installed_line", name = job.name));
+            self.emit_overview();
+        }
+        report.lines.push(t!("worker.demo_note").into());
+        Ok(report)
+    }
+
     fn run_hasp(&self, exe: &Path, step: usize, steps: usize, report: &mut Report) {
         self.progress(step, steps, t!("worker.hasp_package"), t!("worker.stage_hasp"), None, "", false);
         self.em.log(Level::Info, t!("worker.hasp_starting", path = exe.display()));
@@ -604,6 +674,10 @@ impl Worker {
     }
 
     fn send_licences(&self) {
+        if self.demo.is_some() {
+            self.em.send(Event::Licences { result: Ok(crate::demo::licences()), account: None });
+            return;
+        }
         let account = crate::creds::load_licman().map(|(u, _)| u);
         let result = self.licman().and_then(|mut l| l.list_licences());
         if let Err(e) = &result {
