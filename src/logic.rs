@@ -43,7 +43,7 @@ struct Group {
 }
 
 fn keep_newest(slot: &mut Option<RemoteFile>, f: &RemoteFile) {
-    if slot.as_ref().map_or(true, |cur| f.date > cur.date) {
+    if slot.as_ref().is_none_or(|cur| f.date > cur.date) {
         *slot = Some(f.clone());
     }
 }

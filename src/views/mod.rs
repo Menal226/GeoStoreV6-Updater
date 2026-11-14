@@ -1,6 +1,6 @@
 mod dashboard;
 mod help;
-mod history;
+pub(crate) mod history;
 mod login;
 mod settings;
 mod wizard;

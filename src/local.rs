@@ -111,7 +111,7 @@ pub fn editor_info() -> EditorInfo {
                 let newer = info
                     .display_version
                     .as_deref()
-                    .map_or(true, |cur| compare_versions(&v, cur).is_gt());
+                    .is_none_or(|cur| compare_versions(&v, cur).is_gt());
                 if newer {
                     info.display_version = Some(v);
                 }
@@ -139,9 +139,18 @@ pub struct DavkaLog {
 
 impl DavkaLog {
     pub fn read() -> Self {
+        use std::io::{Read, Seek, SeekFrom};
+        // davka.bat appends to this log on every install, and only its last few runs matter here.
+        const TAIL: u64 = 8 * 1024 * 1024;
         let path = paths::davka_log();
         let date = modified_date(&path);
-        let bytes = std::fs::read(&path).unwrap_or_default();
+        let mut bytes = Vec::new();
+        if let Ok(mut file) = std::fs::File::open(&path) {
+            let len = file.metadata().map_or(0, |m| m.len());
+            if file.seek(SeekFrom::Start(len.saturating_sub(TAIL))).is_ok() {
+                let _ = file.read_to_end(&mut bytes);
+            }
+        }
         let text = String::from_utf8_lossy(&bytes).to_lowercase();
         let marks: Vec<usize> = text
             .match_indices("robust file copy")
@@ -324,14 +333,18 @@ pub fn open_in_explorer(path: &Path) {
 }
 
 /// A running program cannot delete itself, so a hidden cmd.exe waits for this process to exit and removes what is left.
-pub fn remove_after_exit(files: &[PathBuf], dirs: &[PathBuf]) {
+/// `dirs` go with everything in them, `empty_dirs` only when nothing else is left inside.
+pub fn remove_after_exit(files: &[PathBuf], dirs: &[PathBuf], empty_dirs: &[PathBuf]) {
     use std::os::windows::process::CommandExt;
     let mut script = String::from("/c ping -n 4 127.0.0.1 >nul");
     for f in files {
-        script.push_str(&format!(" & del /f /q \"{}\"", f.display()));
+        script.push_str(&format!(" & del /f /q /a \"{}\"", f.display()));
     }
     for d in dirs {
         script.push_str(&format!(" & rmdir /s /q \"{}\"", d.display()));
+    }
+    for d in empty_dirs {
+        script.push_str(&format!(" & rmdir \"{}\"", d.display()));
     }
     let root = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
     let _ = std::process::Command::new("cmd.exe")

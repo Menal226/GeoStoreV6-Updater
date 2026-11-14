@@ -42,6 +42,22 @@ impl App {
         }
     }
 
+    fn plan_names(&self, plan: &CleanPlan) -> Option<Vec<String>> {
+        let mut names = Vec::new();
+        if plan.editor {
+            names.push("GeoStore V6".to_string());
+        }
+        for k in &plan.modules {
+            names.push(self.row(k)?.info.name.clone());
+        }
+        for (on, key) in [(plan.hasp, "wizard.short_hasp"), (plan.vcredist, "wizard.short_vcredist"), (plan.licence.is_some(), "wizard.short_licence")] {
+            if on {
+                names.push(i18n::get(key).to_string());
+            }
+        }
+        Some(names)
+    }
+
     fn no_licences(&self) -> bool {
         matches!(&self.licences, Licences::Ready(l) if l.is_empty())
     }
@@ -158,20 +174,44 @@ impl App {
         self.wizard.editor || self.rows.iter().any(|r| r.is_editor() && r.detected)
     }
 
-    fn wizard_item(ui: &mut egui::Ui, checked: &mut bool, enabled: bool, name: &str, row: &PackageRow) {
-        ui.horizontal(|ui| {
-            widgets::checkbox(ui, checked, widgets::semibold_text(name, 14.0, if enabled { TEXT } else { DISABLED_TEXT }), enabled);
-            if row.detected {
-                let (text, color) = match row.status {
-                    Status::UpdateAvailable => (t!("wizard.installed_outdated"), DANGER),
-                    _ => (t!("wizard.installed_current"), SUCCESS),
-                };
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    ui.label(widgets::semibold_text(text, 13.0, color));
+    /// One selectable package: the whole block (name, status and note) is a hover-highlighted click target.
+    fn wizard_item(ui: &mut egui::Ui, checked: &mut bool, enabled: bool, name: &str, row: &PackageRow, note: &str) {
+        let bg = ui.painter().add(egui::Shape::Noop);
+        let block = ui
+            .scope(|ui| {
+                ui.horizontal(|ui| {
+                    let mut shown = *checked;
+                    widgets::checkbox(ui, &mut shown, widgets::semibold_text(name, 14.0, if enabled { TEXT } else { DISABLED_TEXT }), enabled);
+                    let (text, color, glyph) = match (row.detected, row.status) {
+                        (false, _) => (t!("wizard.not_installed"), SUBTLE, None),
+                        (true, Status::UpdateAvailable) => (t!("wizard.installed_outdated"), TEXT, Some(icon::UP)),
+                        (true, _) => (t!("wizard.installed_current"), SUCCESS, Some(icon::CHECK)),
+                    };
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.label(RichText::new(text).size(14.0).color(color));
+                        if let Some(g) = glyph {
+                            ui.label(widgets::icon_text(g, 12.0, if color == TEXT { ACCENT } else { color }));
+                        }
+                    });
                 });
-            }
-        });
-        ui.add_space(-6.0);
+                if !note.is_empty() {
+                    ui.add_space(-4.0);
+                    widgets::indented(ui, |ui| widgets::muted(ui, note));
+                }
+            })
+            .response
+            .rect;
+        let rect = block.expand2(egui::vec2(10.0, 4.0));
+        let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+        let resp = ui.interact(rect, ui.id().with(("wizard_item", name)), sense);
+        if enabled && resp.clicked() {
+            *checked = !*checked;
+        }
+        if enabled && resp.hovered() {
+            ui.painter().set(bg, egui::Shape::rect_filled(rect, egui::CornerRadius::same(8), HOVER.gamma_multiply(0.6)));
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
     }
 
     pub(crate) fn ui_wizard(&mut self, ui: &mut egui::Ui) {
@@ -180,13 +220,7 @@ impl App {
             self.licences = Licences::Loading;
             self.send(Cmd::Licences);
         }
-        widgets::page_header(
-            ui,
-            t!("wizard.title"),
-            "",
-            None,
-            |_| {},
-        );
+        widgets::page_header(ui, t!("wizard.title"), t!("wizard.subtitle"), None, |_| {});
 
         let mut bar_top = None;
         if !self.rows.is_empty() {
@@ -204,6 +238,8 @@ impl App {
                             b.to_string()
                         } else if plan.is_empty() {
                             t!("wizard.select_one").to_string()
+                        } else if let Some(items) = self.plan_names(&plan).filter(|n| n.len() <= 3) {
+                            i18n::fill(i18n::plural("wizard.selected_items", items.len() as u64), &[("n", items.len().to_string()), ("items", items.join(", "))])
                         } else {
                             let n = plan.modules.len() + usize::from(plan.editor);
                             let extras = usize::from(plan.hasp) + usize::from(plan.vcredist) + usize::from(plan.licence.is_some());
@@ -216,7 +252,8 @@ impl App {
                                 count("wizard.selected_packages", n)
                             }
                         };
-                        ui.label(RichText::new(summary).size(14.0).color(MUTED));
+                        let selectable = blocker.is_none() && !plan.is_empty();
+                        ui.label(RichText::new(&summary).size(14.0).color(if selectable { TEXT } else { MUTED }));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             let ok = !plan.is_empty() && can_install && blocker.is_none();
                             if widgets::button(ui, Some(icon::PLAY), t!("wizard.start"), Btn::Primary, ok).clicked() {
@@ -259,52 +296,36 @@ impl App {
         let enabled = !self.busy();
         let editor_row = self.rows.iter().find(|r| r.is_editor()).cloned();
 
-        widgets::card(ui, |ui| {
-            widgets::card_title(ui, t!("wizard.editor.title"));
+        let modules: Vec<_> = self.rows.iter().filter(|r| !r.is_editor()).cloned().collect();
+        // Package rows are 28px tall, so an 18px bottom margin centres the last one as far from the edge as the title.
+        widgets::card_with(ui, Margin { left: 20, right: 20, top: 20, bottom: 18 }, |ui| {
+            let editor_available = editor_row.as_ref().is_some_and(|r| r.latest.is_some());
+            let all = modules.iter().all(|r| self.wizard.modules.get(&r.key).copied().unwrap_or(false)) && (self.wizard.editor || !editor_available);
+            widgets::card_header(ui, t!("wizard.packages_title"), |ui| {
+                let text = if all { t!("wizard.modules.deselect_all") } else { t!("wizard.modules.select_all") };
+                if widgets::button_ex(ui, None, text, Btn::Secondary, enabled, 0.0, 28.0).clicked() {
+                    if editor_available {
+                        self.wizard.editor = !all;
+                    }
+                    for r in &modules {
+                        self.wizard.modules.insert(r.key.clone(), !all);
+                    }
+                }
+            });
             ui.add_space(12.0);
             match &editor_row {
                 Some(row) if row.latest.is_some() => {
-                    App::wizard_item(ui, &mut self.wizard.editor, enabled, "GeoStore V6", row);
-                    if row.detected {
-                        widgets::indented(ui, |ui| {
-                            widgets::muted(ui, t!("wizard.editor.reinstall_note"));
-                        });
-                    }
+                    App::wizard_item(ui, &mut self.wizard.editor, enabled, "GeoStore V6", row, "");
                 }
                 _ => widgets::muted(ui, t!("wizard.editor.not_found")),
             }
-        });
-        ui.add_space(12.0);
-
-        let modules: Vec<_> = self.rows.iter().filter(|r| !r.is_editor()).cloned().collect();
-        widgets::card(ui, |ui| {
-            ui.horizontal(|ui| {
-                widgets::card_title(ui, t!("wizard.modules.title"));
-                let all = modules.iter().all(|r| self.wizard.modules.get(&r.key).copied().unwrap_or(false));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let text = if all { t!("wizard.modules.deselect_all") } else { t!("wizard.modules.select_all") };
-                    let link = ui.add_enabled(enabled, egui::Button::new(RichText::new(text).size(13.0).color(ACCENT)).frame(false));
-                    if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-                        for r in &modules {
-                            self.wizard.modules.insert(r.key.clone(), !all);
-                        }
-                    }
-                });
-            });
-            ui.add_space(12.0);
-            let count = modules.len();
-            for (i, row) in modules.iter().enumerate() {
+            for row in &modules {
                 if row.complete.is_none() && row.latest.is_none() {
                     continue;
                 }
+                ui.add_space(4.0);
                 let checked = self.wizard.modules.entry(row.key.clone()).or_insert(false);
-                App::wizard_item(ui, checked, enabled, &row.info.name, row);
-                widgets::indented(ui, |ui| {
-                    ui.label(RichText::new(&row.info.description).size(13.0).color(MUTED));
-                });
-                if i + 1 < count {
-                    ui.add_space(8.0);
-                }
+                App::wizard_item(ui, checked, enabled, &row.info.name, row, "");
             }
         });
         ui.add_space(12.0);
@@ -312,24 +333,18 @@ impl App {
         widgets::card(ui, |ui| {
             widgets::card_title(ui, t!("wizard.extras.title"));
             ui.add_space(12.0);
-            widgets::checkbox(
-                ui,
-                &mut self.wizard.hasp,
-                RichText::new(t!("wizard.extras.hasp")).size(14.0),
-                enabled,
-            );
-            ui.add_space(12.0);
+            widgets::checkbox(ui, &mut self.wizard.hasp, RichText::new(t!("wizard.extras.hasp")).size(14.0), enabled);
+            ui.add_space(8.0);
             let vc_enabled = enabled && self.wizard.editor;
-            let vc = widgets::checkbox(
-                ui,
-                &mut self.wizard.vcredist,
-                RichText::new(t!("wizard.extras.vcredist")).size(14.0),
-                vc_enabled,
-            );
-            if !self.wizard.editor {
-                vc.on_hover_text(t!("wizard.extras.vcredist_hint"));
-            }
-            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                widgets::checkbox(ui, &mut self.wizard.vcredist, RichText::new(t!("wizard.extras.vcredist")).size(14.0), vc_enabled);
+                if !self.wizard.editor {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(RichText::new(t!("wizard.extras.vcredist_hint")).size(14.0).color(SUBTLE));
+                    });
+                }
+            });
+            ui.add_space(8.0);
             let lic_enabled = enabled && self.licence_possible() && !self.no_licences();
             let mut lic_on = self.wizard.licence && !self.no_licences();
             let lic = widgets::checkbox(ui, &mut lic_on, RichText::new(t!("wizard.extras.licence")).size(14.0), lic_enabled);

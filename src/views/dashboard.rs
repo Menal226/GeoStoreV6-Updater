@@ -13,6 +13,7 @@ const TILE: f32 = 40.0;
 const TILE_GAP: f32 = 12.0;
 const MORE_SLOT: f32 = 32.0;
 const MIN_GAP: f32 = 16.0;
+const STATE_ICON_SLOT: f32 = 18.0;
 
 enum RowState {
     Installing(String),
@@ -32,8 +33,8 @@ struct RowCells {
     description: RichText,
     installed: RichText,
     version: Option<egui::text::LayoutJob>,
-    installed_tip: &'static str,
-    portal: RichText,
+    portal: egui::text::LayoutJob,
+    newer: bool,
     state: StateCell,
 }
 
@@ -63,12 +64,28 @@ fn text_width(ui: &egui::Ui, text: impl Into<egui::WidgetText>) -> f32 {
     text.into().into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body).size().x
 }
 
-fn header_text(text: &str) -> RichText {
-    RichText::new(text).size(12.0).color(SUBTLE)
+/// Portal date; when newer than the installed one, bold with an up arrow so the state does not rest on colour alone.
+fn newer_job(date: &str, newer: bool) -> egui::text::LayoutJob {
+    use egui::text::TextFormat;
+    let family = if newer { semibold() } else { egui::FontFamily::Proportional };
+    let mut job = egui::text::LayoutJob::single_section(date.to_string(), TextFormat { font_id: egui::FontId::new(14.0, family), color: TEXT, ..Default::default() });
+    if newer {
+        job.append(&icon::UP.to_string(), 6.0, TextFormat { font_id: egui::FontId::new(12.0, icons()), color: ACCENT, valign: Align::Center, ..Default::default() });
+    }
+    job
 }
 
-const INSTALL_LABEL: (Option<char>, &str) = (None, "dashboard.install");
+fn header_text(text: &str) -> RichText {
+    RichText::new(text).size(13.5).color(SUBTLE)
+}
+
+const INSTALL_LABEL: (Option<char>, &str) = (Some(icon::ADD), "dashboard.install");
 const UPDATE_LABEL: (Option<char>, &str) = (Some(icon::DOWNLOAD), "dashboard.update");
+
+/// Update and install buttons share one width so their edges line up down the column.
+fn row_button_w(ui: &egui::Ui) -> f32 {
+    widgets::button_width(ui, UPDATE_LABEL.0, i18n::get(UPDATE_LABEL.1)).max(widgets::button_width(ui, INSTALL_LABEL.0, i18n::get(INSTALL_LABEL.1)))
+}
 
 /// One or two text lines, centred as a block within the row height.
 fn cell(ui: &mut egui::Ui, width: f32, first: impl Into<egui::WidgetText>, second: Option<egui::WidgetText>) -> egui::Response {
@@ -91,11 +108,8 @@ fn cell(ui: &mut egui::Ui, width: f32, first: impl Into<egui::WidgetText>, secon
 impl App {
     fn dashboard_status(&self, pending: usize) -> (String, Mark) {
         if let Some(op) = &self.op {
-            let text = match op.progress.as_ref().filter(|p| p.steps > 0) {
-                Some(p) if p.steps > 1 => t!("dashboard.installing_step", step = p.step, steps = p.steps),
-                _ => t!("dashboard.installing").into(),
-            };
-            return (text, Mark::Busy);
+            let text = if op.update { t!("dashboard.updating") } else { t!("dashboard.installing") };
+            return (text.into(), Mark::Pending);
         }
         if self.checking {
             return (t!("dashboard.checking_portal").into(), Mark::Busy);
@@ -106,11 +120,14 @@ impl App {
         let Some(t) = self.last_check else {
             return (t!("dashboard.never_checked").into(), Mark::Empty);
         };
-        let when = t!("dashboard.last_check", when = fmt::datetime(t));
+        let mut when = t!("dashboard.last_check", when = fmt::datetime(t));
+        if let Some(next) = self.next_check() {
+            when = format!("{when} · {}", t!("dashboard.next_check_short", when = fmt::datetime(next)));
+        }
         if self.editor_missing() {
             (t!("dashboard.editor_missing", when = when), Mark::Pending)
         } else if pending > 0 {
-            (i18n::fill(i18n::plural("dashboard.updates_available", pending as u64), &[("n", pending.to_string()), ("when", when)]), Mark::Error)
+            (i18n::fill(i18n::plural("dashboard.updates_available", pending as u64), &[("n", pending.to_string()), ("when", when)]), Mark::Pending)
         } else {
             (t!("dashboard.all_up_to_date", when = when), Mark::Success)
         }
@@ -129,10 +146,7 @@ impl App {
             Some(RowState::Finished)
         } else if let Some(p) = op.progress.as_ref().filter(|p| p.package == row.info.name) {
             let label = match p.kind {
-                StageKind::Download => match p.fraction {
-                    Some(f) => t!("dashboard.stage_download_percent", percent = format!("{:.0}", f * 100.0)),
-                    None => t!("dashboard.stage_download").into(),
-                },
+                StageKind::Download => t!("dashboard.stage_download").into(),
                 StageKind::Extract => t!("dashboard.stage_extract").into(),
                 StageKind::Other => t!("dashboard.stage_install").into(),
             };
@@ -158,13 +172,14 @@ impl App {
                 self.actions.push(Action::Navigate(crate::app::View::Wizard));
             }
             if !pending.is_empty()
-                && !busy
                 && widgets::button(ui, Some(icon::DOWNLOAD), &t!("dashboard.update_all", count = pending.len()), Btn::Primary, can_install).clicked()
             {
                 self.actions.push(Action::Ask(Confirm::UpdateAll(pending.clone())));
             }
             let label = if checking { t!("dashboard.checking") } else { t!("dashboard.check_now") };
-            if !busy && widgets::button(ui, Some(icon::REFRESH), label, Btn::Secondary, !checking && !self.bg_busy).clicked() {
+            let can_check = !checking && !self.bg_busy && !busy;
+            let f5 = ui.input(|i| i.key_pressed(egui::Key::F5));
+            if widgets::button(ui, Some(icon::REFRESH), label, Btn::Secondary, can_check).clicked() || (f5 && can_check) {
                 self.actions.push(Action::Check);
             }
         });
@@ -222,10 +237,9 @@ impl App {
                 } else {
                     self.ui_package_list(ui, &tracked, true, &cols);
                 }
-                self.ui_next_check(ui);
 
                 if !others.is_empty() {
-                    widgets::section_title(ui, t!("dashboard.other_packages"), "");
+                    ui.add_space(4.0);
                     self.ui_package_list(ui, &others, false, &cols);
                 }
                 ui.add_space(16.0);
@@ -233,46 +247,34 @@ impl App {
         });
     }
 
-    fn ui_next_check(&self, ui: &mut egui::Ui) {
+    fn next_check(&self) -> Option<chrono::DateTime<Local>> {
         if !self.cfg.auto_check || !self.creds_stored || self.op.is_some() || self.bg_busy {
-            return;
+            return None;
         }
-        let next = self.cfg.next_check(self.last_auto_check);
-        let text = if next <= Local::now() {
-            t!("dashboard.next_check_soon").to_string()
-        } else {
-            t!("dashboard.next_check", when = fmt::datetime(next))
-        };
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.add_space(4.0);
-            ui.label(widgets::icon_text(icon::REFRESH, 12.0, SUBTLE));
-            ui.label(RichText::new(text).size(12.5).color(SUBTLE));
-        });
+        Some(self.cfg.next_check(self.last_auto_check)).filter(|n| *n > Local::now())
     }
 
     fn row_cells(&self, row: &PackageRow, tracked: bool) -> RowCells {
         let row_state = self.row_state(row);
         let finished = matches!(row_state, Some(RowState::Finished));
-        let version = row.local_version.clone().filter(|_| row.detected || finished);
-        let (date, installed_tip) = match (finished, row.detected, row.installed_date) {
-            (true, _, _) => (row.latest.as_ref().map(|f| f.date), t!("dashboard.tip_just_installed")),
-            (false, false, _) => (None, ""),
-            (false, true, d) if row.from_state => (d, t!("dashboard.tip_installed_by_app")),
-            (false, true, d) => (d, t!("dashboard.tip_installed_elsewhere")),
+        let version = row.local_version.clone().filter(|_| row.detected && !finished);
+        let date = match (finished, row.detected) {
+            (true, _) => row.latest.as_ref().map(|f| f.date),
+            (false, false) => None,
+            (false, true) => row.installed_date,
         };
         let installed = match date {
-            Some(d) => widgets::mono_text(fmt::date(d), 13.0, if finished { SUCCESS } else { MONO_INK }),
-            None => widgets::mono_text("—", 13.0, SUBTLE),
+            Some(d) => RichText::new(fmt::date(d)).size(14.0).color(TEXT),
+            None => RichText::new(if tracked { "—" } else { "" }).size(14.0).color(SUBTLE),
         };
         let version = match (&version, row.detected || finished) {
-            (Some(v), _) => Some(widgets::numbers_job(&t!("dashboard.version", version = v), 12.5, SECONDARY_INK)),
-            (None, true) => Some(widgets::numbers_job(t!("dashboard.version_unknown"), 12.5, SECONDARY_INK)),
+            (Some(v), _) => Some(widgets::numbers_job(&t!("dashboard.version", version = v), 13.5, MUTED)),
+            (None, true) if finished => Some(widgets::numbers_job(t!("dashboard.version_pending"), 13.5, MUTED)),
+            (None, true) => Some(widgets::numbers_job(t!("dashboard.version_unknown"), 13.5, MUTED)),
             (None, false) => None,
         };
         let newer = row.status == Status::UpdateAvailable && !finished;
         let portal_date = row.latest.as_ref().map(|f| fmt::date(f.date)).unwrap_or_else(|| "—".into());
-        let op_running = self.op.is_some();
         let state = match row_state {
             Some(RowState::Installing(label)) => StateCell::Busy(label),
             Some(RowState::Queued) => StateCell::Text(t!("dashboard.queued"), SUBTLE, None),
@@ -281,8 +283,8 @@ impl App {
                 StateCell::Text(label, SUCCESS, None)
             }
             None => match row.status {
-                Status::UpdateAvailable if (tracked || row.detected) && !op_running => StateCell::Update,
-                Status::NotInstalled if !row.is_editor() && row.latest.is_some() && !op_running => StateCell::Install,
+                Status::UpdateAvailable if tracked || row.detected => StateCell::Update,
+                Status::NotInstalled if !row.is_editor() && row.latest.is_some() => StateCell::Install,
                 _ => {
                     let (text, color, tip) = App::status_text(row);
                     StateCell::Text(text, color, tip)
@@ -290,12 +292,12 @@ impl App {
             },
         };
         RowCells {
-            name: widgets::semibold_text(&row.info.name, 15.0, if tracked { TEXT } else { MUTED }),
-            description: RichText::new(&row.info.description).size(13.0).color(MUTED),
+            name: widgets::semibold_text(&row.info.name, 15.0, TEXT),
+            description: RichText::new(&row.info.description).size(13.5).color(MUTED),
             installed,
             version,
-            installed_tip,
-            portal: widgets::mono_text(portal_date, 13.0, if newer { ACCENT } else { MONO_INK }),
+            portal: newer_job(&portal_date, newer),
+            newer,
             state,
         }
     }
@@ -308,6 +310,15 @@ impl App {
             state: text_width(ui, header_text(t!("dashboard.col_status"))),
             more_ink: text_width(ui, widgets::icon_text(icon::MORE, 14.0, MUTED)),
         };
+        // Every state a row can pass through during an operation, so the grid doesn't shift when one starts.
+        let busy = [t!("dashboard.stage_download"), t!("dashboard.stage_extract"), t!("dashboard.stage_install")];
+        for label in busy {
+            c.state = c.state.max(STATE_ICON_SLOT + text_width(ui, RichText::new(label).size(14.0)));
+        }
+        for text in [t!("dashboard.queued"), t!("dashboard.updated"), t!("dashboard.installed")] {
+            c.state = c.state.max(STATE_ICON_SLOT + text_width(ui, widgets::semibold_text(text, 14.0, TEXT)));
+        }
+        c.state = c.state.max(widgets::button_width(ui, UPDATE_LABEL.0, i18n::get(UPDATE_LABEL.1)));
         for row in &self.rows {
             let cells = self.row_cells(row, self.cfg.is_tracked(&row.key, row.detected));
             c.name = c.name.max(text_width(ui, cells.name)).max(text_width(ui, cells.description));
@@ -315,10 +326,13 @@ impl App {
             if let Some(v) = cells.version {
                 c.installed = c.installed.max(text_width(ui, v));
             }
-            c.portal = c.portal.max(text_width(ui, cells.portal));
+            c.portal = c.portal.max(text_width(ui, newer_job(&row.latest.as_ref().map(|f| fmt::date(f.date)).unwrap_or_default(), true)));
+            for v in [t!("dashboard.version_pending"), t!("dashboard.version_unknown")] {
+                c.installed = c.installed.max(text_width(ui, widgets::numbers_job(v, 13.5, MUTED)));
+            }
             let state = match &cells.state {
-                StateCell::Busy(label) => widgets::MARK_SLOT + text_width(ui, RichText::new(label).size(13.0)),
-                StateCell::Text(text, color, _) => text_width(ui, widgets::semibold_text(*text, 13.0, *color)),
+                StateCell::Busy(label) => STATE_ICON_SLOT + text_width(ui, RichText::new(label).size(14.0)),
+                StateCell::Text(text, color, _) => STATE_ICON_SLOT + text_width(ui, widgets::semibold_text(*text, 14.0, *color)),
                 StateCell::Update => widgets::button_width(ui, UPDATE_LABEL.0, i18n::get(UPDATE_LABEL.1)),
                 StateCell::Install => widgets::button_width(ui, INSTALL_LABEL.0, i18n::get(INSTALL_LABEL.1)),
             };
@@ -338,27 +352,39 @@ impl App {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let (gap, name_w) = cols.fit(ui.available_width());
 
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    let header = |ui: &mut egui::Ui, w: f32, text: &str, tip: Option<&str>| {
-                        ui.allocate_ui_with_layout(egui::vec2(w, 16.0), Layout::left_to_right(Align::Center), |ui| {
-                            ui.set_width(w);
-                            let r = ui.label(header_text(text));
-                            if let Some(t) = tip {
-                                r.on_hover_text(t);
-                            }
+                if tracked {
+                    ui.add_space(12.0);
+                    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 18.0), Layout::left_to_right(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let header = |ui: &mut egui::Ui, w: f32, text: &str| {
+                            ui.allocate_ui_with_layout(egui::vec2(w, 18.0), Layout::left_to_right(Align::Center), |ui| {
+                                ui.set_width(w);
+                                ui.label(header_text(text));
+                            });
+                        };
+                        header(ui, TILE + TILE_GAP + name_w, t!("dashboard.col_package"));
+                        ui.add_space(gap);
+                        let any_installed = rows.iter().any(|r| r.detected);
+                        header(ui, cols.installed, if any_installed { t!("dashboard.col_installed") } else { "" });
+                        ui.add_space(gap);
+                        header(ui, cols.portal, t!("dashboard.col_portal"));
+                        ui.add_space(gap);
+                        header(ui, cols.state, "");
+                    });
+                    ui.add_space(12.0);
+                } else {
+                    ui.add_space(12.0);
+                    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 18.0), Layout::left_to_right(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        let lead = TILE + TILE_GAP + name_w + gap + cols.installed + gap;
+                        ui.allocate_ui_with_layout(egui::vec2(lead, 18.0), Layout::left_to_right(Align::Center), |ui| {
+                            ui.set_width(lead);
+                            ui.label(widgets::semibold_text(t!("dashboard.other_packages"), 14.0, TEXT));
                         });
-                    };
-                    header(ui, TILE + TILE_GAP + name_w, t!("dashboard.col_package"), None);
-                    ui.add_space(gap);
-                    header(ui, cols.installed, t!("dashboard.col_installed"), Some(t!("dashboard.col_installed_tip")));
-                    ui.add_space(gap);
-                    header(ui, cols.portal, t!("dashboard.col_portal"), Some(t!("dashboard.col_portal_tip")));
-                    ui.add_space(gap);
-                    header(ui, cols.state, t!("dashboard.col_status"), None);
-                });
-                ui.add_space(12.0);
+                        ui.label(header_text(t!("dashboard.col_portal")));
+                    });
+                    ui.add_space(12.0);
+                }
 
                 for row in rows {
                     let y = ui.cursor().top();
@@ -376,42 +402,63 @@ impl App {
         let op_running = self.op.is_some();
         let cells = self.row_cells(row, tracked);
         let editor_missing = self.editor_missing();
+        // Registered before the row's widgets so its buttons stay on top; a right-click anywhere else opens the row menu.
+        let row_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), TILE));
+        let open_menu = ui.interact(row_rect, ui.id().with(("row_ctx", &row.key)), egui::Sense::click()).secondary_clicked();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            widgets::module_tile(ui, &row.info.initials, !tracked, TILE);
+            widgets::module_tile(ui, &row.info.initials, TILE);
             ui.add_space(TILE_GAP);
-            let name = cell(ui, name_w, cells.name, Some(cells.description.into()));
-            if let Some(f) = &row.latest {
-                name.on_hover_text(format!("{}\n{}", row.info.description, f.title));
-            }
+            cell(ui, name_w, cells.name, Some(cells.description.into()));
             ui.add_space(gap);
-            let installed = cell(ui, cols.installed, cells.installed, cells.version.map(Into::into));
-            if !cells.installed_tip.is_empty() {
-                installed.on_hover_text(cells.installed_tip);
-            }
+            cell(ui, cols.installed, cells.installed, cells.version.map(Into::into));
             ui.add_space(gap);
-            cell(ui, cols.portal, cells.portal, None);
+            let portal = cell(ui, cols.portal, cells.portal, None);
+            if cells.newer {
+                let name = format!("{}, {}", row.latest.as_ref().map(|f| fmt::date(f.date)).unwrap_or_default(), t!("dashboard.newer_tip"));
+                portal.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &name));
+            }
             ui.add_space(gap);
             ui.allocate_ui_with_layout(egui::vec2(cols.state, TILE), Layout::left_to_right(Align::Center), |ui| {
                 ui.set_width(cols.state);
                 match cells.state {
                     StateCell::Busy(label) => {
-                        widgets::mark_label(ui, Mark::Busy, &label, 13.0);
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        ui.label(widgets::icon_text(icon::DOWNLOAD, 12.0, ACCENT));
+                        ui.label(RichText::new(label).size(14.0).color(ACCENT));
                     }
                     StateCell::Text(text, color, tip) => {
-                        let r = ui.label(widgets::semibold_text(text, 13.0, color));
+                        let glyph = if color == SUCCESS {
+                            Some(icon::CHECK)
+                        } else if color == ACCENT {
+                            Some(icon::UP)
+                        } else {
+                            None
+                        };
+                        let r = ui
+                            .horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                if let Some(g) = glyph {
+                                    ui.label(widgets::icon_text(g, 12.0, color));
+                                }
+                                ui.label(RichText::new(text).size(14.0).color(color));
+                            })
+                            .response;
                         if let Some(tip) = tip {
                             r.on_hover_text(tip);
                         }
                     }
                     StateCell::Update => {
-                        if widgets::button(ui, UPDATE_LABEL.0, i18n::get(UPDATE_LABEL.1), Btn::Secondary, can_install).clicked() {
+                        let resp = widgets::button_sized(ui, UPDATE_LABEL.0, i18n::get(UPDATE_LABEL.1), Btn::Secondary, can_install, row_button_w(ui));
+                        accessible_name(&resp, can_install, i18n::get(UPDATE_LABEL.1), &row.info.name, can_install);
+                        if resp.clicked() {
                             self.actions.push(Action::Install(vec![row.key.clone()], false));
                         }
                     }
                     StateCell::Install if editor_missing => {
-                        let resp = widgets::button(ui, INSTALL_LABEL.0, i18n::get(INSTALL_LABEL.1), Btn::Secondary, true)
+                        let resp = widgets::button_sized(ui, INSTALL_LABEL.0, i18n::get(INSTALL_LABEL.1), Btn::Secondary, true, row_button_w(ui))
                             .on_hover_text(t!("dashboard.install_needs_editor"));
+                        accessible_name(&resp, true, i18n::get(INSTALL_LABEL.1), &row.info.name, true);
                         if resp.clicked() {
                             self.sync_wizard();
                             self.wizard.editor = true;
@@ -420,7 +467,9 @@ impl App {
                         }
                     }
                     StateCell::Install => {
-                        if widgets::button(ui, INSTALL_LABEL.0, i18n::get(INSTALL_LABEL.1), Btn::Secondary, can_install).clicked() {
+                        let resp = widgets::button_sized(ui, INSTALL_LABEL.0, i18n::get(INSTALL_LABEL.1), Btn::Secondary, can_install, row_button_w(ui));
+                        accessible_name(&resp, can_install, i18n::get(INSTALL_LABEL.1), &row.info.name, can_install);
+                        if resp.clicked() {
                             self.actions.push(Action::Ask(Confirm::InstallModule(row.key.clone())));
                         }
                     }
@@ -428,15 +477,11 @@ impl App {
             });
             ui.add_space(gap - cols.more_slack());
             ui.allocate_ui_with_layout(egui::vec2(MORE_SLOT, TILE), Layout::right_to_left(Align::Center), |ui| {
-                if op_running {
-                    return;
-                }
                 let key = row.key.clone();
-                widgets::more_menu(ui, ("row_menu", &key), |ui| {
-                    if row.detected && row.latest.is_some() {
-                        if widgets::menu_item(ui, Some(icon::REFRESH), t!("dashboard.reinstall"), can_install).clicked() {
-                            self.actions.push(Action::Ask(Confirm::Reinstall(key.clone())));
-                        }
+                let menu_name = format!("{} – {}", t!("widgets.more_actions"), row.info.name);
+                widgets::more_menu(ui, ("row_menu", &key), &menu_name, !op_running, open_menu, |ui| {
+                    if row.detected && row.latest.is_some() && widgets::menu_item(ui, Some(icon::REFRESH), t!("dashboard.reinstall"), can_install).clicked() {
+                        self.actions.push(Action::Ask(Confirm::Reinstall(key.clone())));
                     }
                     if row.status == Status::UpdateAvailable && widgets::menu_item(ui, Some(icon::CHECK), t!("dashboard.mark_current"), true).clicked() {
                         self.actions.push(Action::MarkCurrent(key.clone()));
@@ -449,4 +494,13 @@ impl App {
             });
         });
     }
+}
+
+/// A row button's screen-reader name: the action, the package, and why it is unavailable while an installation runs.
+fn accessible_name(resp: &egui::Response, enabled: bool, action: &str, package: &str, can_install: bool) {
+    let mut name = format!("{action} – {package}");
+    if !can_install {
+        name = format!("{name} ({})", t!("dashboard.wait_for_op"));
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, &name));
 }

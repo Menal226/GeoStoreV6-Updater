@@ -317,7 +317,7 @@ unsafe fn instance() -> HINSTANCE {
 
 unsafe fn load_icon(metric: SYSTEM_METRICS_INDEX) -> HICON {
     let size = GetSystemMetrics(metric);
-    LoadImageW(instance(), PCWSTR(1 as *const u16), IMAGE_ICON, size, size, LR_DEFAULTCOLOR)
+    LoadImageW(instance(), PCWSTR(std::ptr::without_provenance(1)), IMAGE_ICON, size, size, LR_DEFAULTCOLOR)
         .map(|h| HICON(h.0))
         .unwrap_or_default()
 }

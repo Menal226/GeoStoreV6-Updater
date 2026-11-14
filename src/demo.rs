@@ -54,7 +54,7 @@ pub struct Demo {
 
 impl Demo {
     pub fn new() -> Self {
-        let installed = [(EDITOR, "6.3.11.0", 60), ("IG", "6.3.12.0", 3), ("DTMCR", "6.3.10.0", 90)]
+        let installed = [(EDITOR, "6.3.11.0", 60), ("IG", "6.3.12.0", 5), ("DTMCR", "6.3.10.0", 90)]
             .into_iter()
             .map(|(key, version, age)| (key.to_string(), (version.to_string(), days_ago(age))))
             .collect();

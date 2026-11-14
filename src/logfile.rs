@@ -57,15 +57,10 @@ pub fn append(line: &LogLine) {
         }
     }
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&p) {
-        for text in line.text.lines() {
-            let _ = writeln!(
-                f,
-                "{} [{}] {}",
-                line.time.format("%Y-%m-%d %H:%M:%S"),
-                line.level.tag(),
-                text
-            );
-        }
+        // One write per entry, so lines from the window and the tray process never interleave.
+        let stamp = line.time.format("%Y-%m-%d %H:%M:%S");
+        let entry: String = line.text.lines().map(|text| format!("{stamp} [{}] {text}\n", line.level.tag())).collect();
+        let _ = f.write_all(entry.as_bytes());
     }
 }
 

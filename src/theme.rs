@@ -9,7 +9,7 @@ pub const ACCENT: Color32 = Color32::from_rgb(0x1D, 0x5F, 0xD8);
 pub const ACCENT_HOVER: Color32 = Color32::from_rgb(0x18, 0x50, 0xB8);
 pub const ACCENT_SOFT: Color32 = Color32::from_rgb(0xEB, 0xF1, 0xFD);
 pub const DISABLED_FILL: Color32 = Color32::from_rgb(0xE7, 0xE7, 0xEA);
-pub const DISABLED_TEXT: Color32 = Color32::from_rgb(0x8A, 0x8A, 0x93);
+pub const DISABLED_TEXT: Color32 = Color32::from_rgb(0x62, 0x62, 0x68);
 pub const CHECK_BORDER: Color32 = Color32::from_rgb(0x8A, 0x8A, 0x90);
 
 pub const BG: Color32 = Color32::from_rgb(0xFA, 0xFA, 0xFA);
@@ -23,9 +23,8 @@ pub const TRACK: Color32 = Color32::from_rgb(0xEC, 0xEC, 0xEE);
 
 pub const TEXT: Color32 = Color32::from_rgb(0x17, 0x17, 0x17);
 pub const MUTED: Color32 = Color32::from_rgb(0x52, 0x52, 0x52);
-pub const SUBTLE: Color32 = Color32::from_rgb(0x73, 0x73, 0x73);
+pub const SUBTLE: Color32 = Color32::from_rgb(0x66, 0x66, 0x66);
 pub const MONO_INK: Color32 = Color32::from_rgb(0x3A, 0x3A, 0x40);
-pub const SECONDARY_INK: Color32 = Color32::from_rgb(0x5E, 0x5E, 0x64);
 
 pub const SUCCESS: Color32 = Color32::from_rgb(0x16, 0x80, 0x3C);
 pub const WARN: Color32 = Color32::from_rgb(0xA1, 0x52, 0x07);
@@ -53,10 +52,6 @@ pub fn mono_soft_family() -> FontFamily {
     FontFamily::Name("mono_soft".into())
 }
 
-pub fn mono_soft(size: f32) -> FontId {
-    FontId::new(size, mono_soft_family())
-}
-
 fn load_font(name: &str) -> Option<Vec<u8>> {
     let windir = std::env::var("WINDIR").unwrap_or_else(|_| r"C:\Windows".into());
     std::fs::read(Path::new(&windir).join("Fonts").join(name)).ok()
@@ -79,7 +74,6 @@ pub fn setup(ctx: &egui::Context) {
     let has_icons = add("icons", &["SegoeIcons.ttf", "segmdl2.ttf"], 0.0);
     // Consolas sits higher than Segoe UI on a shared line; nudge it onto the same baseline.
     let has_mono = add("mono", &["consola.ttf", "CascadiaMono.ttf"], MONO_BASELINE);
-    let has_mono_soft = add("mono_soft", &["consola.ttf", "CascadiaMono.ttf"], MONO_BASELINE);
 
     let proportional = fonts
         .families
@@ -100,12 +94,8 @@ pub fn setup(ctx: &egui::Context) {
             .or_default()
             .insert(0, "mono".into());
     }
-    let mut soft_list = Vec::new();
-    if has_mono_soft {
-        soft_list.push("mono_soft".to_string());
-    }
-    soft_list.extend(fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default());
-    fonts.families.insert(mono_soft_family(), soft_list);
+    let monospace = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
+    fonts.families.insert(mono_soft_family(), monospace);
     let mut semibold_list = Vec::new();
     if has_semibold {
         semibold_list.push("segoe_sb".to_string());
@@ -126,7 +116,7 @@ pub fn setup(ctx: &egui::Context) {
     ctx.set_theme(ThemePreference::Light);
     ctx.style_mut_of(Theme::Light, |style| {
         style.text_styles = [
-            (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
+            (TextStyle::Small, FontId::new(13.0, FontFamily::Proportional)),
             (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
             (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
             (TextStyle::Heading, FontId::new(28.0, FontFamily::Proportional)),
@@ -141,10 +131,11 @@ pub fn setup(ctx: &egui::Context) {
         style.spacing.icon_width = 18.0;
         style.spacing.icon_width_inner = 10.0;
         style.spacing.scroll = egui::style::ScrollStyle::floating();
-        style.spacing.scroll.bar_width = 6.0;
-        style.spacing.scroll.floating_width = 3.0;
+        style.spacing.scroll.bar_width = 10.0;
+        style.spacing.scroll.floating_width = 5.0;
         style.spacing.scroll.bar_inner_margin = 0.0;
         style.spacing.scroll.bar_outer_margin = 3.0;
+        style.spacing.scroll.dormant_handle_opacity = 0.5;
 
         let mut v = Visuals::light();
         v.panel_fill = BG;
@@ -171,17 +162,17 @@ pub fn setup(ctx: &egui::Context) {
             w.expansion = 0.0;
         }
         v.widgets.inactive.bg_fill = CARD;
-        v.widgets.inactive.weak_bg_fill = RAISED;
+        v.widgets.inactive.weak_bg_fill = CARD;
         v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, CONTROL_BORDER);
         v.widgets.inactive.fg_stroke = Stroke::new(1.0_f32, TEXT);
         v.widgets.hovered.bg_fill = CARD;
-        v.widgets.hovered.weak_bg_fill = HOVER;
+        v.widgets.hovered.weak_bg_fill = RAISED;
         v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(0xA1, 0xA1, 0xAA));
         v.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, TEXT);
         v.widgets.active.weak_bg_fill = Color32::from_rgb(0xE4, 0xE4, 0xE7);
         v.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
         v.widgets.active.fg_stroke = Stroke::new(1.0_f32, TEXT);
-        v.widgets.open.weak_bg_fill = HOVER;
+        v.widgets.open.weak_bg_fill = RAISED;
         v.widgets.open.bg_stroke = Stroke::new(1.0_f32, CONTROL_BORDER);
         style.visuals = v;
     });

@@ -10,13 +10,20 @@ impl App {
             .frame(Frame::new().fill(BG))
             .show(ctx, |ui| {
                 let width = 400.0;
-                let height = 510.0;
+                let height_id = egui::Id::new("login_card_height");
+                let height: f32 = ui.data(|d| d.get_temp(height_id)).unwrap_or(460.0);
                 ui.add_space(((ui.available_height() - height) / 2.0).max(24.0));
                 ui.horizontal(|ui| {
                     ui.add_space(((ui.available_width() - width) / 2.0).max(16.0));
                     ui.vertical(|ui| {
                         ui.set_width(width);
+                        let top = ui.cursor().top();
                         widgets::card(ui, |ui| self.login_card(ui));
+                        let h = ui.min_rect().bottom() - top;
+                        if (h - height).abs() > 0.5 {
+                            ui.data_mut(|d| d.insert_temp(height_id, h));
+                            ui.ctx().request_repaint();
+                        }
                     });
                 });
             });
@@ -29,8 +36,28 @@ impl App {
             });
     }
 
+    /// The subtitle with the portal address as a link, centred as one line.
+    fn subtitle_with_link(ui: &mut egui::Ui) {
+        const HOST: &str = "portal.geostore.cz";
+        let text = t!("login.subtitle");
+        let (before, after) = text.split_once(HOST).unwrap_or((text, ""));
+        let font = egui::FontId::new(13.5, egui::FontFamily::Proportional);
+        let width = |s: &str| ui.fonts(|f| f.layout_no_wrap(s.to_string(), font.clone(), MUTED).size().x);
+        let total = width(before) + width(HOST) + width(after);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(((ui.available_width() - total) / 2.0).max(0.0));
+            ui.label(RichText::new(before).font(font.clone()).color(MUTED));
+            let link = ui.add(egui::Label::new(RichText::new(HOST).font(font.clone()).color(ACCENT).underline()).sense(egui::Sense::click()));
+            if link.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                crate::local::open_url("https://portal.geostore.cz");
+            }
+            ui.label(RichText::new(after).font(font.clone()).color(MUTED));
+        });
+    }
+
     fn field_label(ui: &mut egui::Ui, text: &str) {
-        ui.label(RichText::new(text).size(13.0).color(MUTED));
+        ui.label(RichText::new(text).size(13.5).color(MUTED));
         ui.add_space(6.0);
     }
 
@@ -42,7 +69,7 @@ impl App {
             ui.add_space(16.0);
             ui.label(RichText::new("GeoStoreV6 Updater").size(22.0).color(TEXT));
             ui.add_space(4.0);
-            ui.label(RichText::new(t!("login.subtitle")).size(13.5).color(MUTED));
+            Self::subtitle_with_link(ui);
         });
         ui.add_space(24.0);
 
@@ -61,15 +88,15 @@ impl App {
             egui::TextEdit::singleline(&mut self.login.pass)
                 .password(!self.login.show_pass)
                 .desired_width(f32::INFINITY)
-                .margin(egui::Margin { left: 12, right: 40, top: 9, bottom: 9 }),
+                .margin(egui::Margin { left: 12, right: 44, top: 9, bottom: 9 }),
         );
-        let eye = egui::Rect::from_center_size(egui::pos2(ui.max_rect().right() - 20.0, pass.rect.center().y), egui::vec2(28.0, 28.0));
+        let eye = egui::Rect::from_center_size(egui::pos2(ui.max_rect().right() - 20.0, pass.rect.center().y), egui::vec2(32.0, 32.0));
         let (glyph, tip) = if self.login.show_pass { (icon::HIDE, t!("login.hide_password")) } else { (icon::VIEW, t!("login.show_password")) };
         let toggled = ui
-            .allocate_new_ui(egui::UiBuilder::new().max_rect(eye), |ui| widgets::button_ex(ui, Some(glyph), "", Btn::Ghost, !busy, 28.0, 28.0))
-            .inner
-            .on_hover_text(tip)
-            .clicked();
+            .allocate_new_ui(egui::UiBuilder::new().max_rect(eye), |ui| widgets::button_ex(ui, Some(glyph), "", Btn::Ghost, !busy, 32.0, 32.0))
+            .inner;
+        toggled.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, !busy, tip));
+        let toggled = toggled.on_hover_text(tip).clicked();
         if toggled {
             self.login.show_pass = !self.login.show_pass;
         }
@@ -105,7 +132,7 @@ impl App {
         }
         ui.add_space(20.0);
         ui.vertical_centered(|ui| {
-            ui.label(RichText::new(t!("login.disclaimer")).size(12.5).color(MUTED));
+            ui.label(RichText::new(t!("login.disclaimer")).size(13.0).color(MUTED));
         });
         ui.add_space(4.0);
     }

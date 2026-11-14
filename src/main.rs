@@ -126,7 +126,7 @@ fn main() -> eframe::Result<()> {
         let options = eframe::NativeOptions {
             viewport: egui::ViewportBuilder::default()
                 .with_title(WINDOW_TITLE)
-                .with_inner_size([1060.0, 720.0])
+                .with_inner_size([1060.0 * app::shot_zoom(), 720.0 * app::shot_zoom()])
                 .with_min_inner_size([960.0, 600.0])
                 .with_icon(icon.clone()),
             renderer,

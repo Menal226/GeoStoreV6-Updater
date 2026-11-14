@@ -10,6 +10,7 @@ use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::t;
@@ -17,6 +18,13 @@ use crate::t;
 pub const BASE: &str = "https://portal.geostore.cz/v6/support/framework/";
 pub const LICMAN: &str = "https://install.geovap.cz/licman/app/framework/";
 const API_TIMEOUT: Duration = Duration::from_secs(60);
+/// On the blocking client this limits the wait for a response and each read of its body, not the whole download.
+const STALL_TIMEOUT: Duration = Duration::from_secs(300);
+
+static AVAILABLE_ROLES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""availableRoles":(\[[^\]]*\])"#).unwrap());
+static SINGLE_ROLE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#""role":"([^"]+)","roleTitle":""#).unwrap());
+static DOWNLOAD_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"href="(AsyncJSON\.ashx\?action=repositoryFileDownload[^"]*)""#).unwrap());
+static LICENCE_SHAPE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9A-Fa-f-]{36}\|[A-Za-z0-9+/]+=*$").unwrap());
 
 #[derive(Debug)]
 pub struct SessionExpired;
@@ -134,7 +142,7 @@ impl Portal {
             .cookie_store(true)
             .user_agent(concat!("GeoStoreUpdater/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(20))
-            .timeout(None::<Duration>)
+            .timeout(STALL_TIMEOUT)
             .build()?;
         Ok(Self {
             client,
@@ -150,7 +158,6 @@ impl Portal {
     }
 
     pub fn list_licences(&mut self) -> Result<Vec<Licence>> {
-        let shape = licence_shape();
         let mut out: Vec<Licence> = Vec::new();
         for role in self.roles.clone() {
             let v = self.call(json!({
@@ -160,7 +167,7 @@ impl Portal {
                 "folder_id": ""
             }))?;
             let mut folders = Vec::new();
-            collect_all_folders(v.get("folders"), &mut folders);
+            collect_folders(v.get("folders"), &mut folders);
             for (folder, sql) in folders {
                 if !sql.contains("licen") {
                     continue;
@@ -176,15 +183,12 @@ impl Portal {
                     ]
                 }))?;
                 let data = &v["table"]["data"];
-                let cols: Vec<String> = data["columns"]
-                    .as_array()
-                    .map(|a| a.iter().map(|c| c.as_str().unwrap_or("").to_lowercase()).collect())
-                    .unwrap_or_default();
+                let cols = column_names(data);
                 let idx = |n: &str| cols.iter().position(|c| c == n);
                 let (Some(i_code), Some(i_key)) = (idx("code"), idx("floating_guid")) else {
                     continue;
                 };
-                for row in data["rows"].as_array().cloned().unwrap_or_default() {
+                for row in data["rows"].as_array().into_iter().flatten() {
                     let get = |name: &str| -> String {
                         match idx(name).and_then(|i| row.get(i)) {
                             Some(Value::String(s)) => s.trim().to_string(),
@@ -197,7 +201,7 @@ impl Portal {
                         continue;
                     }
                     let key = row.get(i_key).and_then(Value::as_str).unwrap_or("").trim().to_string();
-                    if !shape.is_match(&key) {
+                    if !LICENCE_SHAPE.is_match(&key) {
                         continue;
                     }
                     let guid = key.split('|').next().unwrap_or_default().to_lowercase();
@@ -245,7 +249,7 @@ impl Portal {
             bail!(t!("portal.licman_http", status = resp.status()));
         }
         let text = resp.text()?.trim().to_string();
-        if !licence_shape().is_match(&text) || !text.to_lowercase().starts_with(&guid) {
+        if !LICENCE_SHAPE.is_match(&text) || !text.to_lowercase().starts_with(&guid) {
             bail!(t!("portal.licman_invalid"));
         }
         Ok(text)
@@ -326,14 +330,12 @@ impl Portal {
             return Err(SessionExpired.into());
         }
         let html = resp.text()?;
-        let re = Regex::new(r#""availableRoles":(\[[^\]]*\])"#).unwrap();
-        let mut roles: Vec<Role> = re
+        let mut roles: Vec<Role> = AVAILABLE_ROLES
             .captures(&html)
             .and_then(|c| serde_json::from_str(&c[1]).ok())
             .unwrap_or_default();
         if roles.is_empty() {
-            let re = Regex::new(r#""role":"([^"]+)","roleTitle":""#).unwrap();
-            if let Some(c) = re.captures(&html) {
+            if let Some(c) = SINGLE_ROLE.captures(&html) {
                 roles.push(Role {
                     name: c[1].to_string(),
                 });
@@ -406,7 +408,10 @@ impl Portal {
             }))?;
             let mut folders = Vec::new();
             collect_folders(v.get("folders"), &mut folders);
-            for folder in folders {
+            for (folder, sql) in folders {
+                if !sql.is_empty() && !sql.contains("file") {
+                    continue;
+                }
                 for f in self.review(&role.name, &folder)? {
                     if !out.iter().any(|o| o.id == f.id) {
                         out.push(f);
@@ -432,21 +437,14 @@ impl Portal {
                 ]
             }))?;
             let data = &v["table"]["data"];
-            let cols: Vec<String> = data["columns"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .map(|c| c.as_str().unwrap_or("").to_lowercase())
-                        .collect()
-                })
-                .unwrap_or_default();
+            let cols = column_names(data);
             let idx = |n: &str| cols.iter().position(|c| c == n);
             let (Some(i_id), Some(i_title), Some(i_date), Some(i_code)) =
                 (idx("id"), idx("web_title"), idx("datum"), idx("code"))
             else {
                 return Ok(out);
             };
-            for row in data["rows"].as_array().cloned().unwrap_or_default() {
+            for row in data["rows"].as_array().into_iter().flatten() {
                 let get = |i: usize| -> String {
                     match row.get(i) {
                         Some(Value::String(s)) => s.clone(),
@@ -487,8 +485,6 @@ impl Portal {
             ["select", "rsDetailAkce", ""]
         ]});
         let b64 = base64::engine::general_purpose::STANDARD.encode(pars.to_string());
-        let re = Regex::new(r#"href="(AsyncJSON\.ashx\?action=repositoryFileDownload[^"]*)""#)
-            .unwrap();
         for attempt in 0..2 {
             let html = self
                 .client
@@ -498,7 +494,7 @@ impl Portal {
                 .send()
                 .context(t!("portal.connect"))?
                 .text()?;
-            if let Some(c) = re.captures(&html) {
+            if let Some(c) = DOWNLOAD_LINK.captures(&html) {
                 let link = html_escape::decode_html_entities(&c[1]).to_string();
                 return Ok(format!("{}{link}", self.base));
             }
@@ -514,7 +510,7 @@ impl Portal {
         url: &str,
         dest: &Path,
         cancel: &AtomicBool,
-        mut on_progress: impl FnMut(u64),
+        on_progress: impl FnMut(u64),
     ) -> Result<u64> {
         let mut attempt = 0;
         let mut resp = loop {
@@ -546,39 +542,45 @@ impl Portal {
         };
 
         let part = dest.with_extension("part");
-        let mut file = BufWriter::with_capacity(1 << 20, File::create(&part)?);
-        let mut buf = vec![0u8; 256 * 1024];
-        let mut total = 0u64;
-        loop {
-            if cancel.load(Ordering::Relaxed) {
-                drop(file);
-                let _ = std::fs::remove_file(&part);
-                return Err(Cancelled.into());
-            }
-            let n = match resp.read(&mut buf) {
-                Ok(n) => n,
-                Err(e) => {
-                    drop(file);
-                    let _ = std::fs::remove_file(&part);
-                    return Err(anyhow!(e).context(t!("portal.download_interrupted")));
-                }
-            };
-            if n == 0 {
-                break;
-            }
-            file.write_all(&buf[..n])?;
-            total += n as u64;
-            on_progress(total);
-        }
-        file.flush()?;
-        drop(file);
-        if total == 0 {
+        let saved = save_body(&mut resp, &part, cancel, on_progress).and_then(|total| {
+            std::fs::rename(&part, dest)?;
+            Ok(total)
+        });
+        if saved.is_err() {
             let _ = std::fs::remove_file(&part);
-            bail!(t!("portal.empty_file"));
         }
-        std::fs::rename(&part, dest)?;
-        Ok(total)
+        saved
     }
+}
+
+fn save_body(body: &mut impl Read, part: &Path, cancel: &AtomicBool, mut on_progress: impl FnMut(u64)) -> Result<u64> {
+    let mut file = BufWriter::with_capacity(1 << 20, File::create(part)?);
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut total = 0u64;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(Cancelled.into());
+        }
+        let n = body.read(&mut buf).context(t!("portal.download_interrupted"))?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n])?;
+        total += n as u64;
+        on_progress(total);
+    }
+    file.flush()?;
+    if total == 0 {
+        bail!(t!("portal.empty_file"));
+    }
+    Ok(total)
+}
+
+fn column_names(data: &Value) -> Vec<String> {
+    data["columns"]
+        .as_array()
+        .map(|a| a.iter().map(|c| c.as_str().unwrap_or("").to_lowercase()).collect())
+        .unwrap_or_default()
 }
 
 fn state_of(v: &Value) -> i64 {
@@ -587,30 +589,8 @@ fn state_of(v: &Value) -> i64 {
         .unwrap_or(1)
 }
 
-fn collect_folders(v: Option<&Value>, out: &mut Vec<String>) {
-    let Some(arr) = v.and_then(Value::as_array) else {
-        return;
-    };
-    for f in arr {
-        let id = f
-            .get("clientId")
-            .or_else(|| f.get("name"))
-            .and_then(Value::as_str);
-        let sql = f.get("sql").and_then(Value::as_str).unwrap_or("").to_lowercase();
-        if let Some(id) = id {
-            if sql.is_empty() || sql.contains("file") {
-                out.push(id.to_string());
-            }
-        }
-        collect_folders(f.get("childs"), out);
-    }
-}
-
-fn licence_shape() -> Regex {
-    Regex::new(r"^[0-9A-Fa-f-]{36}\|[A-Za-z0-9+/]+=*$").unwrap()
-}
-
-fn collect_all_folders(v: Option<&Value>, out: &mut Vec<(String, String)>) {
+/// Every folder of a role as (id, lowercased sql name), subfolders included.
+fn collect_folders(v: Option<&Value>, out: &mut Vec<(String, String)>) {
     let Some(arr) = v.and_then(Value::as_array) else {
         return;
     };
@@ -620,7 +600,7 @@ fn collect_all_folders(v: Option<&Value>, out: &mut Vec<(String, String)>) {
         if let Some(id) = id {
             out.push((id.to_string(), sql));
         }
-        collect_all_folders(f.get("childs"), out);
+        collect_folders(f.get("childs"), out);
     }
 }
 

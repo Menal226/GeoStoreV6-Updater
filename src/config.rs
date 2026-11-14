@@ -77,8 +77,13 @@ impl Config {
             CheckMode::Interval => last + chrono::Duration::hours(self.check_interval_hours.max(1) as i64),
             CheckMode::Daily => {
                 let slot = |date: NaiveDate| {
+                    // A time skipped by the switch to summer time moves an hour later; falling back to `now` would make the check due all day.
                     date.and_hms_opt(self.daily_check_hour.min(23), self.daily_check_minute.min(59), 0)
-                        .and_then(|t| t.and_local_timezone(Local).earliest())
+                        .and_then(|t| {
+                            t.and_local_timezone(Local)
+                                .earliest()
+                                .or_else(|| (t + chrono::Duration::hours(1)).and_local_timezone(Local).earliest())
+                        })
                         .unwrap_or(now)
                 };
                 let today = slot(now.date_naive());
@@ -151,7 +156,8 @@ fn load_json<T: DeserializeOwned + Default>(path: &Path) -> T {
 
 fn save_json<T: Serialize>(path: &Path, value: &T) {
     if let Ok(text) = serde_json::to_string_pretty(value) {
-        let tmp = path.with_extension("tmp");
+        // The window and the tray process save the same files, so each writes its own temporary copy.
+        let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
         if std::fs::write(&tmp, text).is_ok() {
             let _ = std::fs::rename(&tmp, path);
         }

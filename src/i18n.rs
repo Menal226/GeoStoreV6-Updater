@@ -38,8 +38,32 @@ impl Lang {
             Lang::Cs => (&CS, include_str!("../lang/cs.json")),
             Lang::En => (&EN, include_str!("../lang/en.json")),
         };
-        cell.get_or_init(|| serde_json::from_str(source).unwrap_or_default())
+        cell.get_or_init(|| {
+            let mut table: HashMap<String, String> = serde_json::from_str(source).unwrap_or_default();
+            if self == Lang::Cs {
+                table.values_mut().for_each(|v| *v = tie_short_words(v));
+            }
+            table
+        })
     }
+}
+
+/// Czech typography: a one-letter word (k, s, v, z, o, u, a, i) must not end a line, so the space after it becomes non-breaking.
+fn tie_short_words(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    for (i, &c) in chars.iter().enumerate() {
+        let single = i > 0
+            && "ksvzouaiKSVZOUAI".contains(chars[i - 1])
+            && (i < 2 || !chars[i - 2].is_alphanumeric());
+        out.push(if c == ' ' && single { '\u{A0}' } else { c });
+    }
+    out
+}
+
+/// Text with non-breaking spaces turned back into plain ones, for comparing log lines with templates.
+pub fn plain(text: &str) -> String {
+    text.replace('\u{A0}', " ")
 }
 
 static CURRENT: AtomicU8 = AtomicU8::new(Lang::Cs as u8);
@@ -90,10 +114,23 @@ pub fn fill(template: &str, args: &[(&str, String)]) -> String {
     out
 }
 
+/// Log text written in another language, in the current one, when it is a fixed string without placeholders.
+pub fn translate_fixed(text: &str) -> Option<&'static str> {
+    let cur = current();
+    Lang::ALL.iter().filter(|&&l| l as u8 != cur as u8).find_map(|&lang| {
+        lang.table()
+            .iter()
+            .find(|(_, v)| !v.contains('{') && plain(v).trim_end_matches('.') == text)
+            .and_then(|(k, _)| cur.table().get(k))
+            .map(|v| v.trim_end_matches('.'))
+    })
+}
+
 /// Whether `text` starts with the fixed part of `key` in any language. For text read back from the log, which may have been written in another language.
 pub fn starts_with_any(text: &str, key: &'static str) -> bool {
     Lang::ALL.iter().any(|&lang| {
-        let prefix = get_in(lang, key).split('{').next().unwrap_or_default();
+        let template = plain(get_in(lang, key));
+        let prefix = template.split('{').next().unwrap_or_default();
         !prefix.is_empty() && text.starts_with(prefix)
     })
 }

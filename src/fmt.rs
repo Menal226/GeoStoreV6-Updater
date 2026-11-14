@@ -9,8 +9,8 @@ pub fn date(d: NaiveDate) -> String {
 pub fn datetime(dt: DateTime<Local>) -> String {
     let today = Local::now().date_naive();
     let d = dt.date_naive();
-    let time = dt.format("%H:%M");
-    if d == today {
+    let time = dt.format("%H:%M").to_string();
+    let text = if d == today {
         t!("fmt.today_at", time = time)
     } else if Some(d) == today.pred_opt() {
         t!("fmt.yesterday_at", time = time)
@@ -18,6 +18,13 @@ pub fn datetime(dt: DateTime<Local>) -> String {
         t!("fmt.tomorrow_at", time = time)
     } else {
         t!("fmt.date_at", date = date(d), time = time)
+    };
+    // Czech says "ve" before hours that start with a consonant cluster: ve dvě, ve tři, ve čtyři, ve dvanáct, ve dvacet…
+    use chrono::Timelike;
+    if i18n::current() == Lang::Cs && matches!(dt.hour(), 2..=4 | 12..=14 | 20..=23) {
+        text.replacen(&format!(" v {time}"), &format!(" ve {time}"), 1)
+    } else {
+        text
     }
 }
 

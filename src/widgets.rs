@@ -28,7 +28,10 @@ pub mod icon {
     pub const PLAY: char = '\u{E768}';
     pub const DELETE: char = '\u{E74D}';
     pub const LINK: char = '\u{E71B}';
-    pub const HELP: char = '\u{E897}';
+    pub const HELP: char = '\u{E9CE}';
+    pub const ADD: char = '\u{E710}';
+    pub const UP: char = '\u{E74A}';
+    pub const SIGN_OUT: char = '\u{F3B1}';
 }
 
 pub fn icon_text(c: char, size: f32, color: Color32) -> RichText {
@@ -39,9 +42,6 @@ pub fn semibold_text(text: impl Into<String>, size: f32, color: Color32) -> Rich
     RichText::new(text).family(theme::semibold()).size(size).color(color)
 }
 
-pub fn mono_text(text: impl Into<String>, size: f32, color: Color32) -> RichText {
-    RichText::new(text).family(FontFamily::Monospace).size(size).color(color)
-}
 
 pub fn soft_mono_text(text: impl Into<String>, size: f32, color: Color32) -> RichText {
     RichText::new(text).family(theme::mono_soft_family()).size(size).color(color)
@@ -157,8 +157,16 @@ pub fn checkbox(ui: &mut Ui, checked: &mut bool, text: impl Into<WidgetText>, en
             painter.rect_stroke(b.expand(2.0), CornerRadius::same(6), Stroke::new(1.5_f32, ACCENT), StrokeKind::Outside);
         }
         let color = if enabled { TEXT } else { DISABLED_TEXT };
-        let pos = egui::pos2(b.right() + CHECK_GAP, rect.center().y - galley.size().y / 2.0);
-        painter.galley(pos, galley, color);
+        // Centred on the capital-letter height like buttons, so diacritics don't push the text off the box's centre.
+        let y = match galley.job.sections.first() {
+            Some(s) => {
+                let cap = ui.fonts(|f| f.layout_no_wrap("H".to_string(), s.format.font_id.clone(), color));
+                let (baseline, cap_top, _) = ink_metrics(&cap);
+                b.center().y - (baseline + cap_top / 2.0)
+            }
+            None => rect.center().y - galley.size().y / 2.0,
+        };
+        painter.galley(egui::pos2(b.right() + CHECK_GAP, y), galley, color);
     }
     if enabled {
         resp.on_hover_cursor(CursorIcon::PointingHand)
@@ -196,7 +204,14 @@ pub fn radio(ui: &mut Ui, selected: bool, title: &str, detail: &str, enabled: bo
             painter.circle_stroke(center, r + 3.0, Stroke::new(1.5_f32, ACCENT));
         }
         let x = rect.left() + CHECK_SIZE + CHECK_GAP;
-        let title_y = center.y - title_g.size().y / 2.0;
+        let title_y = match title_g.job.sections.first() {
+            Some(s) => {
+                let cap = ui.fonts(|f| f.layout_no_wrap("H".to_string(), s.format.font_id.clone(), TEXT));
+                let (baseline, cap_top, _) = ink_metrics(&cap);
+                center.y - (baseline + cap_top / 2.0)
+            }
+            None => center.y - title_g.size().y / 2.0,
+        };
         painter.galley(egui::pos2(x, title_y), title_g, if enabled { TEXT } else { DISABLED_TEXT });
         painter.galley(egui::pos2(x, rect.top() + line_h + 2.0), detail_g, if enabled { MUTED } else { DISABLED_TEXT });
     }
@@ -224,7 +239,7 @@ pub fn language_picker(ui: &mut Ui, current: Lang) -> Option<Lang> {
                 }
             })
             .response
-            .on_hover_text(t!("lang.label"));
+            .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, format!("{}: {}", t!("lang.label"), current.name())));
     });
     picked
 }
@@ -256,7 +271,8 @@ fn ink_metrics(galley: &egui::Galley) -> (f32, f32, f32) {
 /// Top and bottom of a single-glyph galley's visible ink, relative to the galley top.
 /// Read from the rasterised glyph because icon fonts report loose outline bounds.
 fn icon_ink(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
-    static CACHE: std::sync::Mutex<Vec<([u16; 2], [u16; 2], f32, f32)>> = std::sync::Mutex::new(Vec::new());
+    type InkSpan = ([u16; 2], [u16; 2], f32, f32);
+    static CACHE: std::sync::Mutex<Vec<InkSpan>> = std::sync::Mutex::new(Vec::new());
     let Some(g) = galley.rows.first().and_then(|r| r.glyphs.first()) else {
         return (0.0, galley.size().y);
     };
@@ -283,6 +299,12 @@ fn icon_ink(ui: &Ui, galley: &egui::Galley) -> (f32, f32) {
     (top + first * scale, top + last * scale)
 }
 
+/// The "→" between two values, a little heavier than the text so it does not look faint next to the digits.
+fn append_arrow(job: &mut LayoutJob, size: f32, color: Color32) {
+    job.append("→", 0.0, TextFormat { font_id: FontId::new(size + 1.0, theme::semibold()), color, ..Default::default() });
+    job.append(" ", 0.0, TextFormat { font_id: FontId::new(size, FontFamily::Proportional), color, ..Default::default() });
+}
+
 /// Grey box of "name   from → to" rows, padded by the letters' ink so the top and bottom margins match.
 pub fn change_list(ui: &mut Ui, lines: &[(String, String)]) {
     const PAD_X: f32 = 12.0;
@@ -293,7 +315,15 @@ pub fn change_list(ui: &mut Ui, lines: &[(String, String)]) {
         .iter()
         .map(|(name, change)| {
             let name = WidgetText::from(semibold_text(name, 13.5, TEXT)).into_galley(ui, Some(TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
-            let change = WidgetText::from(mono_text(change, 13.0, MONO_INK)).into_galley(ui, Some(TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
+            let mut job = LayoutJob::default();
+            let (from, to) = change.split_once(" → ").map_or((change.as_str(), ""), |(a, b)| (a, b));
+            job.append(from, 0.0, TextFormat { font_id: FontId::new(13.5, FontFamily::Proportional), color: MUTED, ..Default::default() });
+            if !to.is_empty() {
+                job.append(" ", 0.0, TextFormat { font_id: FontId::new(13.5, FontFamily::Proportional), color: MUTED, ..Default::default() });
+                append_arrow(&mut job, 13.5, MUTED);
+                job.append(to, 0.0, TextFormat { font_id: FontId::new(13.5, theme::semibold()), color: TEXT, ..Default::default() });
+            }
+            let change = WidgetText::from(job).into_galley(ui, Some(TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
             (name, change)
         })
         .collect();
@@ -316,12 +346,10 @@ pub fn change_list(ui: &mut Ui, lines: &[(String, String)]) {
         let (nb, _, _) = ink_metrics(&name);
         let (cb, _, _) = ink_metrics(&change);
         painter.galley(egui::pos2(rect.left() + PAD_X, baseline - nb), name, TEXT);
-        painter.galley(egui::pos2(rect.left() + PAD_X + NAME_COL, baseline - cb), change, MONO_INK);
+        painter.galley(egui::pos2(rect.left() + PAD_X + NAME_COL, baseline - cb), change, MUTED);
     }
 }
 
-/// Width a `mark_label` adds in front of its text (glyph plus spacing).
-pub const MARK_SLOT: f32 = 20.0;
 
 pub fn button_width(ui: &Ui, ic: Option<char>, text: &str) -> f32 {
     let mut job = LayoutJob::default();
@@ -379,13 +407,7 @@ pub fn button_ex(ui: &mut Ui, ic: Option<char>, text: &str, kind: Btn, enabled: 
         Btn::Ghost => (Color32::TRANSPARENT, HOVER, MUTED, Color32::TRANSPARENT),
         Btn::Danger => (DANGER, Color32::from_rgb(0xB9, 0x1C, 0x1C), Color32::WHITE, Color32::TRANSPARENT),
     };
-    let fg = if enabled {
-        fg
-    } else if matches!(kind, Btn::Primary | Btn::Danger) {
-        DISABLED_TEXT
-    } else {
-        fg.gamma_multiply(0.45)
-    };
+    let fg = if enabled { fg } else { DISABLED_TEXT };
 
     let text_font = FontId::new(14.0, FontFamily::Proportional);
     let icon_color = if kind == Btn::Secondary && enabled { MUTED } else { fg };
@@ -393,7 +415,7 @@ pub fn button_ex(ui: &mut Ui, ic: Option<char>, text: &str, kind: Btn, enabled: 
         (
             f.layout_no_wrap(text.to_string(), text_font.clone(), fg),
             f.layout_no_wrap("H".to_string(), text_font.clone(), fg),
-            ic.map(|c| f.layout_no_wrap(c.to_string(), FontId::new(14.0, theme::icons()), icon_color)),
+            ic.map(|c| f.layout_no_wrap(c.to_string(), FontId::new(if text.is_empty() { 16.0 } else { 14.0 }, theme::icons()), icon_color)),
         )
     });
     let gap = if icon_galley.is_some() && !text.is_empty() { 8.0 } else { 0.0 };
@@ -404,12 +426,15 @@ pub fn button_ex(ui: &mut Ui, ic: Option<char>, text: &str, kind: Btn, enabled: 
     let size = egui::vec2((content_w + padding * 2.0).max(min_width).max(height), height);
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(size, sense);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, text));
     if ui.is_rect_visible(rect) {
         let hovered = enabled && response.hovered();
         let pressed = enabled && response.is_pointer_button_down_on();
         let mut fill = if hovered { bg_hover } else { bg };
         if !enabled && matches!(kind, Btn::Primary | Btn::Danger) {
             fill = DISABLED_FILL;
+        } else if !enabled && kind == Btn::Secondary {
+            fill = RAISED;
         }
         let rect_drawn = if pressed { rect.shrink(0.5) } else { rect };
         let painter = ui.painter();
@@ -442,11 +467,22 @@ pub fn button_ex(ui: &mut Ui, ic: Option<char>, text: &str, kind: Btn, enabled: 
 }
 
 pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    card_with(ui, Margin::same(20), add)
+}
+
+/// A card made of 32px rows: titled cards start with the 22px title row, so a shorter bottom margin puts the last
+/// row's centre as far from the bottom edge as the title's centre is from the top.
+pub fn row_card<R>(ui: &mut Ui, titled: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let top = if titled { 20 } else { 15 };
+    card_with(ui, Margin { left: 20, right: 20, top, bottom: 15 }, add)
+}
+
+pub fn card_with<R>(ui: &mut Ui, margin: Margin, add: impl FnOnce(&mut Ui) -> R) -> R {
     Frame::new()
         .fill(CARD)
         .stroke(Stroke::new(1.0_f32, BORDER))
         .corner_radius(CornerRadius::same(12))
-        .inner_margin(Margin::same(20))
+        .inner_margin(margin)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui)
@@ -455,17 +491,17 @@ pub fn card<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 }
 
 pub fn card_title(ui: &mut Ui, title: &str) {
-    ui.label(semibold_text(title, 15.0, TEXT));
+    card_header(ui, title, |_| {});
 }
 
-pub fn section_title(ui: &mut Ui, title: &str, subtitle: &str) {
-    ui.add_space(16.0);
-    ui.label(semibold_text(title, 15.0, TEXT));
-    if !subtitle.is_empty() {
-        ui.add_space(-4.0);
-        ui.label(RichText::new(subtitle).size(13.0).color(MUTED));
-    }
-    ui.add_space(4.0);
+/// Card title row of a fixed height, with optional controls on the right, so every card's content starts at the same offset.
+pub fn card_header(ui: &mut Ui, title: &str, right: impl FnOnce(&mut Ui)) {
+    let w = ui.available_width();
+    // Controls on the right may be taller than the title; they overhang the row instead of pushing the content down.
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 22.0), Sense::hover());
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(rect.expand2(egui::vec2(0.0, 10.0))).layout(Layout::left_to_right(Align::Center)));
+    row.label(semibold_text(title, 15.0, TEXT));
+    row.with_layout(Layout::right_to_left(Align::Center), right);
 }
 
 /// "lead · detail": the lead carries the state colour, the detail stays secondary. Only Busy gets a glyph (the spinner).
@@ -473,7 +509,8 @@ fn status_line(ui: &mut Ui, mark: Mark, text: &str) {
     let (lead, rest) = text.split_once(" · ").map_or((text, ""), |(a, b)| (a, b));
     let (color, family) = match mark {
         Mark::Quiet | Mark::Empty => (MUTED, FontFamily::Proportional),
-        Mark::Busy | Mark::Pending => (ACCENT, theme::semibold()),
+        Mark::Busy => (ACCENT, theme::semibold()),
+        Mark::Pending => (TEXT, theme::semibold()),
         other => (other.color(), theme::semibold()),
     };
     ui.horizontal(|ui| {
@@ -502,9 +539,7 @@ pub fn page_header(ui: &mut Ui, title: &str, subtitle: &str, mark: Option<Mark>,
                     Some(m) => {
                         status_line(ui, m, subtitle);
                     }
-                    None => {
-                        ui.label(RichText::new(subtitle).size(13.5).color(MUTED));
-                    }
+                    None => status_line(ui, Mark::Quiet, subtitle),
                 }
             }
         });
@@ -574,17 +609,16 @@ pub fn indented<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     .inner
 }
 
-pub fn module_tile(ui: &mut Ui, text: &str, dim: bool, size: f32) {
+pub fn module_tile(ui: &mut Ui, text: &str, size: f32) {
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius::same(8), RAISED);
-    painter.rect_stroke(rect, CornerRadius::same(8), Stroke::new(1.0_f32, BORDER), StrokeKind::Inside);
     painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         text,
-        mono(if text.chars().count() > 2 { 12.0 } else { 13.0 }),
-        if dim { SUBTLE } else { MUTED },
+        FontId::new(12.5, theme::semibold()),
+        MUTED,
     );
 }
 
@@ -615,8 +649,31 @@ pub fn progress_bar(ui: &mut Ui, fraction: Option<f32>) {
     }
 }
 
+/// Sidebar row content: icon 12px from the left, label 40px from the left, both centred vertically on their
+/// visible ink (font line metrics would put the icon and accented capitals off-centre).
+pub fn icon_label(ui: &Ui, rect: Rect, ic: char, label: &str, active: bool, max_width: f32) {
+    let (icon_color, color) = if active { (TEXT, TEXT) } else { (SUBTLE, MUTED) };
+    let font = FontId::new(14.0, if active { theme::semibold() } else { FontFamily::Proportional });
+    let mut job = LayoutJob::simple_singleline(label.to_string(), font.clone(), color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(max_width.max(0.0));
+    let (icon_g, text_g, cap_g) = ui.fonts(|f| {
+        (
+            f.layout_no_wrap(ic.to_string(), FontId::new(16.0, theme::icons()), icon_color),
+            f.layout_job(job),
+            f.layout_no_wrap("H".to_string(), font, color),
+        )
+    });
+    let (itop, ibottom) = icon_ink(ui, &icon_g);
+    let (baseline, cap_top, _) = ink_metrics(&cap_g);
+    let mid = rect.center().y;
+    let painter = ui.painter();
+    painter.galley(egui::pos2(rect.left() + 12.0, mid - (itop + ibottom) / 2.0), icon_g, icon_color);
+    painter.galley(egui::pos2(rect.left() + 40.0, mid - (baseline + cap_top / 2.0)), text_g, color);
+}
+
 pub fn nav_item(ui: &mut Ui, ic: char, label: &str, active: bool, count: usize) -> Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, label));
     let painter = ui.painter();
     if active {
         painter.rect_filled(rect, CornerRadius::same(8), CARD);
@@ -626,31 +683,25 @@ pub fn nav_item(ui: &mut Ui, ic: char, label: &str, active: bool, count: usize) 
     } else if response.hovered() {
         painter.rect_filled(rect, CornerRadius::same(8), HOVER);
     }
-    painter.text(
-        egui::pos2(rect.left() + 12.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        ic.to_string(),
-        FontId::new(16.0, theme::icons()),
-        if active { TEXT } else { SUBTLE },
-    );
-    painter.text(
-        egui::pos2(rect.left() + 40.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        FontId::new(14.0, if active { theme::semibold() } else { FontFamily::Proportional }),
-        if active { TEXT } else { MUTED },
-    );
+    icon_label(ui, rect, ic, label, active, f32::INFINITY);
+    let painter = ui.painter();
     if count > 0 {
-        let center = egui::pos2(rect.right() - 16.0, rect.center().y);
-        painter.text(center, egui::Align2::RIGHT_CENTER, count.to_string(), mono(12.0), ACCENT);
-        paint_mark(ui, egui::pos2(rect.right() - 34.0, rect.center().y), Mark::Pending);
+        let galley = painter.layout_no_wrap(count.to_string(), FontId::new(12.0, theme::semibold()), Color32::WHITE);
+        let w = (galley.size().x + 12.0).max(20.0);
+        let pill = Rect::from_center_size(egui::pos2(rect.right() - 12.0 - w / 2.0, rect.center().y), egui::vec2(w, 20.0));
+        painter.rect_filled(pill, CornerRadius::same(10), ACCENT);
+        painter.galley(pill.center() - galley.size() / 2.0, galley, Color32::WHITE);
     }
     response.on_hover_cursor(CursorIcon::PointingHand)
 }
 
 /// A 32px "⋯" button that opens a popup menu below it.
-pub fn more_menu(ui: &mut Ui, id_salt: impl std::hash::Hash, add: impl FnOnce(&mut Ui)) {
-    let resp = button(ui, Some(icon::MORE), "", Btn::Ghost, true).on_hover_text(t!("widgets.more_actions"));
+pub fn more_menu(ui: &mut Ui, id_salt: impl std::hash::Hash, name: &str, enabled: bool, open: bool, add: impl FnOnce(&mut Ui)) {
+    let resp = button(ui, Some(icon::MORE), "", Btn::Secondary, enabled).on_hover_text(t!("widgets.more_actions"));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
+    if open && enabled {
+        ui.memory_mut(|m| m.open_popup(ui.make_persistent_id(&id_salt)));
+    }
     attach_menu(ui, id_salt, resp, add);
 }
 
@@ -697,6 +748,7 @@ fn attach_menu(ui: &mut Ui, id_salt: impl std::hash::Hash, resp: Response, add: 
 pub fn menu_item(ui: &mut Ui, ic: Option<char>, label: &str, enabled: bool) -> Response {
     let sense = if enabled { Sense::click() } else { Sense::hover() };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), sense);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         if enabled && resp.hovered() {
@@ -725,67 +777,28 @@ pub fn menu_separator(ui: &mut Ui) {
 
 fn is_path(word: &str) -> bool {
     const EXT: [&str; 8] = ["zip", "msi", "exe", "bat", "txt", "log", "ini", "cfg"];
-    let version = word.split('.').count() >= 3 && word.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
+    let parts: Vec<&str> = word.split('.').collect();
+    let date = parts.len() == 3 && parts[2].len() == 4;
+    let version = !date && parts.len() >= 3 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()));
     version || word.contains('\\') || word.rsplit_once('.').is_some_and(|(stem, ext)| !stem.is_empty() && EXT.contains(&ext.to_ascii_lowercase().as_str()))
 }
 
-/// Consolas renders denser than Segoe UI at text sizes; a smaller size and lighter ink keep inline runs even.
-fn inline_mono(size: f32, color: Color32) -> TextFormat {
-    TextFormat { font_id: theme::mono_soft((size * 0.93).round()), color: color.lerp_to_gamma(Color32::WHITE, 0.18), ..Default::default() }
+/// The text with file names and paths left out, e.g. "Stahování soubor.zip" becomes "Stahování".
+pub fn without_paths(text: &str) -> String {
+    text.split(' ').filter(|w| !is_path(w.trim_matches(|c: char| "()\"„“.,;:".contains(c)))).collect::<Vec<_>>().join(" ")
 }
 
-/// Sentence where numbers and their units are mono (so they don't jitter while updating) and words stay in Segoe UI.
+/// Segoe UI digits are tabular, so numbers that update in place don't jitter.
 pub fn numbers_job(text: &str, size: f32, color: Color32) -> LayoutJob {
-    const UNITS: [&str; 8] = ["B", "kB", "MB", "GB", "MB/s", "s", "min", "%"];
-    let prop = TextFormat { font_id: FontId::new(size, FontFamily::Proportional), color, ..Default::default() };
-    let mono = inline_mono(size, color);
-    let mut job = LayoutJob::default();
-    let mut prev_number = false;
-    for (i, word) in text.split(' ').enumerate() {
-        if i > 0 {
-            job.append(" ", 0.0, prop.clone());
-        }
-        let number = word.starts_with(|c: char| c.is_ascii_digit());
-        let unit = prev_number && UNITS.contains(&word);
-        job.append(word, 0.0, if number || unit { mono.clone() } else { prop.clone() });
-        prev_number = number;
-    }
-    job
+    LayoutJob::single_section(text.to_string(), TextFormat { font_id: FontId::new(size, FontFamily::Proportional), color, ..Default::default() })
 }
 
-/// Prose followed by a path that may contain spaces, e.g. "Data aplikace: " + "C:\ProgramData\GeoStore Updater".
-/// Text where file names and paths are set in the secondary mono face.
 pub fn path_job(text: &str, size: f32, color: Color32) -> LayoutJob {
-    let prop = TextFormat { font_id: FontId::new(size, FontFamily::Proportional), color, ..Default::default() };
-    let mono = inline_mono(size, color);
-    let mut job = LayoutJob::default();
-    let mut buf = String::new();
-    for (i, word) in text.split(' ').enumerate() {
-        if i > 0 {
-            buf.push(' ');
-        }
-        let start = word.find(|c: char| !"(\"„".contains(c)).unwrap_or(word.len());
-        let end = word.trim_end_matches(|c: char| ".,;:)\"“".contains(c)).len().max(start);
-        if is_path(&word[start..end]) {
-            buf.push_str(&word[..start]);
-            if !buf.is_empty() {
-                job.append(&buf, 0.0, prop.clone());
-                buf.clear();
-            }
-            job.append(&word[start..end], 0.0, mono.clone());
-            buf.push_str(&word[end..]);
-        } else {
-            buf.push_str(word);
-        }
-    }
-    if !buf.is_empty() {
-        job.append(&buf, 0.0, prop);
-    }
-    job
+    LayoutJob::single_section(text.to_string(), TextFormat { font_id: FontId::new(size, FontFamily::Proportional), color, ..Default::default() })
 }
 
 pub fn muted(ui: &mut Ui, text: &str) {
-    let mut job = path_job(text, 13.0, MUTED);
+    let mut job = path_job(text, 13.5, MUTED);
     job.wrap.max_width = ui.available_width().min(640.0);
     let galley = ui.fonts(|f| f.layout_job(job));
     ui.add(egui::Label::new(galley));

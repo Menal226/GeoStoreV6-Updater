@@ -177,6 +177,11 @@ pub struct App {
     close_requested: bool,
     resume: Option<Resume>,
     pub save_creds: Option<String>,
+    pub(crate) log_rev: u64,
+    pub(crate) history: Option<crate::views::history::HistoryCache>,
+    pub(crate) downloads_size: Option<(Instant, u64)>,
+    pub(crate) settings_saved: Option<Instant>,
+    shot_at: Option<Instant>,
 }
 
 pub const ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
@@ -242,6 +247,11 @@ impl App {
             close_requested: false,
             resume: Resume::take(launch.relaunch),
             save_creds: None,
+            log_rev: 0,
+            history: None,
+            downloads_size: None,
+            settings_saved: None,
+            shot_at: None,
             cfg,
         };
         if cfg!(debug_assertions) {
@@ -278,6 +288,10 @@ impl App {
         self.elevated = true;
         let opts: Vec<&str> = mode.split(',').map(str::trim).collect();
         self.preview_confirm = opts.contains(&"confirm");
+        if opts.contains(&"demo") {
+            self.auto_login_started = true;
+            self.send(Cmd::Login { user: "test".into(), pass: "test".into(), remember: false });
+        }
         if opts.contains(&"login") {
             self.auto_login_started = true;
             self.login.user = "jnovak".into();
@@ -338,6 +352,7 @@ impl App {
         self.cfg.language = Some(lang);
         self.cfg.save();
         crate::i18n::set(lang);
+        self.history = None;
         for row in &mut self.rows {
             row.info = crate::catalog::module_info(&row.key);
         }
@@ -436,7 +451,7 @@ impl App {
                     self.login.busy = false;
                     self.login.error = None;
                     self.login.pass.clear();
-                    self.creds_stored = creds::exists();
+                    self.creds_stored = creds::exists() || Self::preview("anon");
                 }
                 Event::LoginFailed(e) => {
                     self.login.busy = false;
@@ -449,7 +464,12 @@ impl App {
                 Event::LoggedOut => {
                     self.logged_in = false;
                     self.licences = Licences::Idle;
+                    self.licman_account = None;
+                    self.wizard = WizardState::default();
                     self.rows.clear();
+                    self.last_check = None;
+                    self.check_error = None;
+                    self.result = None;
                     self.creds_stored = false;
                 }
                 Event::Checking => self.checking = true,
@@ -485,6 +505,7 @@ impl App {
                     }
                 }
                 Event::Log(line) => {
+                    self.log_rev += 1;
                     self.log.push(line);
                     if self.log.len() > MAX_LOG_LINES {
                         let excess = self.log.len() - MAX_LOG_LINES;
@@ -511,6 +532,9 @@ impl App {
                     self.op = None;
                     self.result = Some((outcome, summary));
                     self.cancel.store(false, Ordering::Relaxed);
+                    if self.confirm == Some(Confirm::CancelOp) {
+                        self.confirm = None;
+                    }
                 }
             }
         }
@@ -630,7 +654,11 @@ impl App {
                     self.cfg.tracked.insert(key, on);
                     self.cfg.save();
                 }
-                Action::Cancel => self.cancel.store(true, Ordering::Relaxed),
+                Action::Cancel => {
+                    if self.op.is_some() {
+                        self.cancel.store(true, Ordering::Relaxed);
+                    }
+                }
                 Action::Ask(c) => self.confirm = Some(c),
                 Action::Navigate(v) => self.view = v,
                 Action::DismissResult => self.result = None,
@@ -667,12 +695,14 @@ impl App {
         creds::delete();
         creds::delete_licman();
         if let Some(exe) = crate::selfupdate::app_exe() {
-            let mut dirs = vec![paths::data_dir()];
-            if let Some(parent) = exe.parent().filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().contains("geostore updater"))) {
-                dirs.push(parent.to_path_buf());
-            }
+            let own_dir: Vec<PathBuf> = exe
+                .parent()
+                .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().contains("geostore updater")))
+                .map(|p| p.to_path_buf())
+                .into_iter()
+                .collect();
             let old = exe.with_extension("old.exe");
-            local::remove_after_exit(&[exe, old], &dirs);
+            local::remove_after_exit(&[exe, old], &[paths::data_dir()], &own_dir);
         }
         self.close_requested = true;
     }
@@ -790,10 +820,10 @@ impl App {
         };
         let mut close = false;
         let mut ok = false;
-        let modal = egui::Modal::new(egui::Id::new("confirm")).frame(Self::modal_frame()).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new("confirm")).frame(Self::modal_frame()).backdrop_color(egui::Color32::from_black_alpha(100)).show(ctx, |ui| {
             ui.set_width(520.0);
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.label(RichText::new(&title).size(20.0).color(TEXT));
+            ui.label(widgets::semibold_text(&title, 18.0, TEXT));
             ui.add_space(16.0);
             if !body.is_empty() {
                 ui.add(egui::Label::new(RichText::new(&body).size(14.0).color(MUTED)).wrap());
@@ -803,9 +833,8 @@ impl App {
                 widgets::change_list(ui, &lines);
                 ui.add_space(16.0);
             }
-            match warn {
-                Some((head, text)) => widgets::banner(ui, widgets::Tone::Warn, head, text, 0.0, |_| {}),
-                None => {}
+            if let Some((head, text)) = warn {
+                widgets::banner(ui, widgets::Tone::Warn, head, text, 0.0, |_| {});
             }
             ui.add_space(8.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -838,10 +867,10 @@ impl App {
         let mut ok = false;
         let mut close = false;
         let user = self.user.clone();
-        let modal = egui::Modal::new(egui::Id::new("save_creds")).frame(Self::modal_frame()).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new("save_creds")).frame(Self::modal_frame()).backdrop_color(egui::Color32::from_black_alpha(100)).show(ctx, |ui| {
             ui.set_width(420.0);
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.label(RichText::new(t!("app.save_creds_title")).size(20.0).color(TEXT));
+            ui.label(widgets::semibold_text(t!("app.save_creds_title"), 18.0, TEXT));
             ui.add_space(16.0);
             ui.add(
                 egui::Label::new(
@@ -875,6 +904,9 @@ impl App {
             let pass = self.save_creds.take().unwrap_or_default();
             self.cfg.remember_login = true;
             self.cfg.save();
+            // `self.user` is the name the portal reports back, which need not be the one it accepts at sign-in.
+            let typed = self.login.user.trim();
+            let user = if typed.is_empty() { user } else { typed.to_string() };
             self.send(Cmd::Login { user, pass, remember: true });
         } else if close || modal.should_close() {
             self.save_creds = None;
@@ -885,10 +917,10 @@ impl App {
         let Some((user, pass)) = self.licman_login.as_mut() else { return };
         let mut ok = false;
         let mut close = false;
-        let modal = egui::Modal::new(egui::Id::new("licman_login")).frame(Self::modal_frame()).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new("licman_login")).frame(Self::modal_frame()).backdrop_color(egui::Color32::from_black_alpha(100)).show(ctx, |ui| {
             ui.set_width(420.0);
             ui.spacing_mut().item_spacing.y = 0.0;
-            ui.label(RichText::new(t!("app.licman_title")).size(20.0).color(TEXT));
+            ui.label(widgets::semibold_text(t!("app.licman_title"), 18.0, TEXT));
             ui.add_space(16.0);
             ui.label(RichText::new(t!("app.username")).size(13.0).color(MUTED));
             ui.add_space(6.0);
@@ -941,12 +973,19 @@ impl App {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 let items = [
                     (View::Dashboard, icon::HOME, t!("app.nav_dashboard"), pending),
-                    (View::Wizard, icon::PACKAGE, t!("app.nav_wizard"), 0),
                     (View::History, icon::HISTORY, t!("app.nav_history"), 0),
                     (View::Settings, icon::SETTINGS, t!("app.nav_settings"), 0),
                     (View::Help, icon::HELP, t!("app.nav_help"), 0),
+                    (View::Wizard, icon::PACKAGE, t!("app.nav_wizard"), 0),
                 ];
                 for (view, ic, label, count) in items {
+                    // The clean installation is a rare, disruptive flow, set apart from the everyday pages.
+                    if view == View::Wizard {
+                        ui.add_space(6.0);
+                        let y = ui.cursor().top();
+                        ui.painter().hline(ui.max_rect().x_range().shrink(4.0), y, egui::Stroke::new(1.0_f32, BORDER));
+                        ui.add_space(8.0);
+                    }
                     if widgets::nav_item(ui, ic, label, self.view == view, count).clicked() {
                         self.actions.push(Action::Navigate(view));
                     }
@@ -954,20 +993,14 @@ impl App {
                 ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                     let busy = self.busy();
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), egui::Sense::hover());
-                    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)));
-                    row.add_space(12.0);
-                    row.label(widgets::icon_text(icon::USER, 16.0, SUBTLE));
-                    row.add_space(4.0);
-                    row.add(egui::Label::new(RichText::new(&self.user).size(14.0).color(TEXT)).truncate());
-                    row.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.add_space(14.0);
-                        let resp = ui
-                            .add_enabled(!busy, egui::Button::new(RichText::new(t!("app.logout")).size(13.0).color(MUTED)).frame(false))
-                            .on_hover_cursor(egui::CursorIcon::PointingHand);
-                        if resp.clicked() {
-                            self.actions.push(Action::Ask(Confirm::Logout));
-                        }
-                    });
+                    let logout_w = widgets::button_width(ui, Some(icon::SIGN_OUT), t!("app.logout"));
+                    // The logout button's left padding is empty, so the name may run up to 8px before its icon.
+                    widgets::icon_label(ui, rect, icon::USER, &self.user, false, rect.width() - 40.0 - (logout_w - 16.0) - 2.0 - 8.0);
+                    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(Layout::right_to_left(Align::Center)));
+                    row.add_space(2.0);
+                    if widgets::button_ex(&mut row, Some(icon::SIGN_OUT), t!("app.logout"), Btn::Ghost, !busy, 0.0, 32.0).clicked() {
+                        self.actions.push(Action::Ask(Confirm::Logout));
+                    }
                     ui.add_space(8.0);
                     ui.separator();
                 });
@@ -997,61 +1030,80 @@ impl App {
                 widgets::spinner(ui, 16.0);
                 ui.add_space(4.0);
                 let title = op.progress.as_ref().map(|p| p.package.clone()).unwrap_or_else(|| op.title.clone());
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.label(widgets::semibold_text(title, 15.0, TEXT));
-                    let stage = op.progress.as_ref().map(|p| p.stage.clone()).unwrap_or_else(|| t!("app.preparing").into());
-                    ui.label(widgets::path_job(&stage, 13.0, MUTED));
-                });
+                let stage = op.progress.as_ref().map(|p| p.stage.clone()).unwrap_or_else(|| t!("app.preparing").into());
+                let mut short = widgets::without_paths(&stage);
+                if let Some(p) = op.progress.as_ref().filter(|p| p.steps > 1) {
+                    short = format!("{} · {}", short.trim_end_matches('…'), t!("app.package_step", step = p.step, steps = p.steps));
+                }
                 let cancellable = op.progress.as_ref().is_none_or(|p| p.cancellable) || op.waiting_geostore;
+                let cancelling = self.cancel.load(Ordering::Relaxed);
+                let label = match (cancelling, op.update) {
+                    (true, _) => t!("app.cancelling"),
+                    (false, true) => t!("app.cancel_update"),
+                    (false, false) => t!("app.cancel_install"),
+                };
+                let right_w = if cancellable {
+                    widgets::button_width(ui, Some(icon::CANCEL), label)
+                } else {
+                    ui.fonts(|f| f.layout_no_wrap(t!("app.not_cancellable").to_string(), egui::FontId::proportional(13.0), SUBTLE).size().x)
+                };
+                ui.label(widgets::semibold_text(title, 15.0, TEXT));
+                let text_w = (ui.available_width() - right_w - 16.0).max(40.0);
+                ui.allocate_ui_with_layout(egui::vec2(text_w, 32.0), Layout::left_to_right(Align::Center), |ui| {
+                    ui.add(egui::Label::new(RichText::new(format!("· {short}")).size(13.5).color(MUTED)).truncate());
+                });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if cancellable {
-                        let cancelling = self.cancel.load(Ordering::Relaxed);
-                        let label = if cancelling { t!("app.cancelling") } else { t!("app.cancel_install") };
-                        if widgets::button(ui, None, label, Btn::Secondary, !cancelling).clicked() {
+                        if widgets::button(ui, Some(icon::CANCEL), label, Btn::Secondary, !cancelling).clicked() {
                             self.actions.push(Action::Ask(Confirm::CancelOp));
                         }
                     } else {
-                        ui.label(RichText::new(t!("app.not_cancellable")).size(12.5).color(SUBTLE));
+                        ui.label(RichText::new(t!("app.not_cancellable")).size(13.0).color(SUBTLE));
                     }
                 });
             });
-            ui.add_space(16.0);
+            ui.add_space(8.0);
             widgets::progress_bar(ui, op.progress.as_ref().and_then(|p| p.fraction));
             if let Some(p) = &op.progress {
-                if !p.detail.is_empty() {
-                    ui.add_space(8.0);
-                    ui.label(widgets::numbers_job(&p.detail, 13.5, MUTED));
+                let percent = p.fraction.map(|f| format!("{:.0} %", f * 100.0));
+                let detail = match (percent, p.detail.is_empty()) {
+                    (Some(pc), true) => pc,
+                    (Some(pc), false) => format!("{pc} · {}", p.detail),
+                    (None, _) => p.detail.clone(),
+                };
+                if !detail.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(widgets::numbers_job(&detail, 13.5, MUTED));
                 }
-                if p.steps > 1 {
-                    ui.add_space(16.0);
-                    let names = self.queue_names(&op, p);
-                    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 4.0), egui::Sense::hover());
-                    let gap = 4.0;
-                    let w = (rect.width() - gap * (p.steps - 1) as f32) / p.steps as f32;
-                    for i in 0..p.steps {
-                        let x = rect.left() + i as f32 * (w + gap);
-                        let seg = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(w, 4.0));
-                        let (color, ink) = if i + 1 < p.step {
-                            (SUCCESS, SUCCESS)
-                        } else if i + 1 == p.step {
-                            (ACCENT, ACCENT)
-                        } else {
-                            (TRACK, SUBTLE)
-                        };
-                        ui.painter().rect_filled(seg, CornerRadius::same(2), color);
-                        if let Some(name) = names.get(i) {
-                            let label = name.clone();
-                            ui.painter().text(
-                                egui::pos2(x, rect.bottom() + 8.0),
-                                egui::Align2::LEFT_TOP,
-                                label,
-                                egui::FontId::new(12.5, egui::FontFamily::Proportional),
-                                ink,
-                            );
+                let names = self.queue_names(&op, p);
+                // The dashboard table already shows each package's state; elsewhere these chips are the only queue view.
+                if p.steps > 1 && !names.is_empty() && self.view != View::Dashboard {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for (i, name) in names.iter().enumerate() {
+                            if i > 0 {
+                                ui.add_space(10.0);
+                            }
+                            let (glyph, color, text) = if i + 1 < p.step {
+                                (Some(icon::CHECK), SUCCESS, RichText::new(name).size(13.0).color(MUTED))
+                            } else if i + 1 == p.step {
+                                (None, ACCENT, widgets::semibold_text(name, 13.0, TEXT))
+                            } else {
+                                (None, SUBTLE, RichText::new(name).size(13.0).color(SUBTLE))
+                            };
+                            match glyph {
+                                Some(g) => {
+                                    ui.label(widgets::icon_text(g, 12.0, color));
+                                }
+                                None => {
+                                    let (r, _) = ui.allocate_exact_size(egui::vec2(12.0, 18.0), egui::Sense::hover());
+                                    widgets::paint_mark(ui, r.center(), if i + 1 == p.step { widgets::Mark::Pending } else { widgets::Mark::Empty });
+                                }
+                            }
+                            ui.label(text);
                         }
-                    }
-                    ui.add_space(26.0);
+                    });
                 }
             }
             if op.waiting_geostore {
@@ -1091,7 +1143,7 @@ impl App {
             .then_some(t!("app.status_estimated"));
         match row.status {
             Status::UpToDate => (t!("app.status_current"), SUCCESS, estimated),
-            Status::UpdateAvailable => (t!("app.status_new"), DANGER, None),
+            Status::UpdateAvailable => (t!("app.status_new"), ACCENT, None),
             Status::NotInstalled => (t!("app.status_missing"), SUBTLE, None),
         }
     }
@@ -1115,7 +1167,7 @@ impl eframe::App for App {
         } else {
             self.ui_sidebar(ctx);
             egui::CentralPanel::default()
-                .frame(Frame::new().fill(BG).inner_margin(Margin { left: 32, right: 32, top: 28, bottom: if self.view == View::Wizard { 0 } else { 20 } }))
+                .frame(Frame::new().fill(BG).inner_margin(Margin { left: 32, right: 20, top: 28, bottom: if self.view == View::Wizard { 0 } else { 20 } }))
                 .show(ctx, |ui| match self.view {
                     View::Dashboard => self.ui_dashboard(ui),
                     View::Wizard => self.ui_wizard(ui),
@@ -1131,6 +1183,53 @@ impl eframe::App for App {
         self.apply_actions();
         if self.close_requested {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if cfg!(debug_assertions) {
+            self.debug_shot(ctx);
+        }
+    }
+}
+
+/// Debug-only: GSU_SHOT_ZOOM renders screenshots at a larger scale (e.g. 1.5 for the README images).
+pub fn shot_zoom() -> f32 {
+    if !cfg!(debug_assertions) || std::env::var_os("GSU_SHOT").is_none() {
+        return 1.0;
+    }
+    std::env::var("GSU_SHOT_ZOOM").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0)
+}
+
+impl App {
+    /// Debug-only: with GSU_SHOT set to a .bmp path, saves the window there a few seconds after start and exits.
+    fn debug_shot(&mut self, ctx: &egui::Context) {
+        let Ok(path) = std::env::var("GSU_SHOT") else { return };
+        let started = *self.shot_at.get_or_insert_with(Instant::now);
+        ctx.set_zoom_factor(shot_zoom());
+        ctx.request_repaint_after(Duration::from_millis(100));
+        let image = ctx.input(|i| {
+            i.raw.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(image) = image {
+            let [w, h] = image.size;
+            let mut out = Vec::with_capacity(54 + w * h * 4);
+            out.extend_from_slice(b"BM");
+            out.extend_from_slice(&((54 + w * h * 4) as u32).to_le_bytes());
+            out.extend_from_slice(&[0, 0, 0, 0, 54, 0, 0, 0, 40, 0, 0, 0]);
+            out.extend_from_slice(&(w as i32).to_le_bytes());
+            out.extend_from_slice(&(-(h as i32)).to_le_bytes());
+            out.extend_from_slice(&[1, 0, 32, 0]);
+            out.extend_from_slice(&[0u8; 24]);
+            for p in &image.pixels {
+                out.extend_from_slice(&[p.b(), p.g(), p.r(), 255]);
+            }
+            let _ = std::fs::write(&path, out);
+            std::process::exit(0);
+        }
+        let wait = std::env::var("GSU_SHOT_WAIT").ok().and_then(|s| s.parse().ok()).unwrap_or(4000);
+        if started.elapsed() > Duration::from_millis(wait) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
         }
     }
 }

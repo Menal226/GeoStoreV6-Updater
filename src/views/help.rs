@@ -6,7 +6,7 @@ use crate::theme::{self, *};
 use crate::widgets::{self, icon, Btn};
 use eframe::egui::{self, text::LayoutJob, Align, FontId, Layout, RichText, TextFormat};
 
-const MAX_TEXT: f32 = 720.0;
+const MAX_PAGE: f32 = 800.0;
 const KEY_COL: f32 = 260.0;
 const CONTACT: &str = "gsupdater@menal.net";
 
@@ -146,7 +146,10 @@ fn rich(text: &str) -> LayoutJob {
 
 fn paragraph(ui: &mut egui::Ui, text: &str) {
     let mut job = rich(text);
-    job.wrap.max_width = ui.available_width().min(MAX_TEXT);
+    for s in &mut job.sections {
+        s.format.line_height = Some(21.0);
+    }
+    job.wrap.max_width = ui.available_width();
     let galley = ui.fonts(|f| f.layout_job(job));
     ui.add(egui::Label::new(galley));
 }
@@ -196,20 +199,38 @@ impl App {
         });
 
         widgets::scroll_page(ui, "help_scroll", |ui| {
-            for (title, blocks) in SECTIONS {
-                widgets::card(ui, |ui| {
-                    widgets::card_title(ui, i18n::get(title));
-                    ui.add_space(12.0);
+            ui.set_max_width(ui.available_width().min(MAX_PAGE));
+            egui::Frame::new()
+                .fill(CARD)
+                .stroke(egui::Stroke::new(1.0_f32, BORDER))
+                .corner_radius(egui::CornerRadius::same(12))
+                .inner_margin(egui::Margin::symmetric(20, 0))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    for (i, b) in blocks.iter().enumerate() {
+                    for (i, (title, blocks)) in SECTIONS.iter().enumerate() {
                         if i > 0 {
-                            ui.add_space(gap(&blocks[i - 1], b));
+                            let y = ui.cursor().top();
+                            ui.painter().hline(ui.max_rect().x_range(), y, egui::Stroke::new(1.0_f32, BORDER));
                         }
-                        block(ui, b);
+                        let id = egui::Id::new(("help_open", *title));
+                        let mut open = ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
+                        if section_header(ui, i18n::get(title), open) {
+                            open = !open;
+                        }
+                        if open {
+                            for (j, b) in blocks.iter().enumerate() {
+                                if j > 0 {
+                                    ui.add_space(gap(&blocks[j - 1], b));
+                                }
+                                block(ui, b);
+                            }
+                            ui.add_space(18.0);
+                        }
+                        ui.data_mut(|d| d.insert_temp(id, open));
                     }
                 });
-                ui.add_space(12.0);
-            }
+            ui.add_space(12.0);
 
             widgets::card(ui, |ui| {
                 widgets::card_title(ui, t!("help.contact.title"));
@@ -228,4 +249,24 @@ impl App {
             ui.add_space(28.0);
         });
     }
+}
+
+/// A topic row that opens and closes its text in place. Returns true when clicked.
+fn section_header(ui: &mut egui::Ui, title: &str, open: bool) -> bool {
+    let full = ui.max_rect().x_range();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 48.0), egui::Sense::hover());
+    let hit = egui::Rect::from_x_y_ranges(full.min - 20.0..=full.max + 20.0, rect.y_range());
+    let resp = ui.interact(hit, ui.id().with(("help_section", title)), egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, title));
+    let painter = ui.painter();
+    painter.text(rect.left_center(), egui::Align2::LEFT_CENTER, title, FontId::new(15.0, theme::semibold()), TEXT);
+    let c = egui::pos2(rect.right() - 6.0, rect.center().y);
+    let color = if resp.hovered() { TEXT } else { MUTED };
+    let dy = if open { -1.0 } else { 1.0 };
+    let points = vec![c + egui::vec2(-5.0, -2.5 * dy), c + egui::vec2(0.0, 2.5 * dy), c + egui::vec2(5.0, -2.5 * dy)];
+    painter.add(egui::Shape::line(points, egui::Stroke::new(1.5_f32, color)));
+    if resp.has_focus() {
+        painter.rect_stroke(hit.shrink(2.0), egui::CornerRadius::same(8), egui::Stroke::new(1.5_f32, ACCENT), egui::StrokeKind::Inside);
+    }
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
 }

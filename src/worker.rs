@@ -203,7 +203,14 @@ fn exclusive(name: &str) -> std::io::Result<std::fs::File> {
         .open(paths::data_dir().join(name))
 }
 
+/// The other process holds this lock for an instant whenever it polls `operation_running`, so a refusal is retried before it counts as a running installation.
 fn operation_lock() -> Option<std::fs::File> {
+    for _ in 0..4 {
+        if let Ok(file) = exclusive("operation.lock") {
+            return Some(file);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
     exclusive("operation.lock").ok()
 }
 
@@ -226,7 +233,7 @@ fn portal_lock() -> Result<Option<std::fs::File>> {
 }
 
 pub fn operation_running() -> bool {
-    operation_lock().is_none()
+    exclusive("operation.lock").is_err()
 }
 
 pub fn friendly_error(e: &anyhow::Error) -> String {
@@ -453,7 +460,7 @@ impl Worker {
         for key in &plan.modules {
             let Some(row) = rows.iter().find(|r| &r.key == key) else { continue };
             let Some(file) = row.complete.clone().or_else(|| row.latest.clone()) else { continue };
-            let complete = row.latest.as_ref().map_or(true, |l| l.id != file.id);
+            let complete = row.latest.as_ref().is_none_or(|l| l.id != file.id);
             jobs.push(Job {
                 key: key.clone(),
                 name: row.info.name.clone(),
@@ -474,8 +481,11 @@ impl Worker {
             Err(anyhow!(t!("worker.nothing_selected")))
         } else {
             match operation_lock() {
-                Some(_lock) if self.demo.is_some() => self.run_demo_jobs(jobs),
-                Some(_lock) => self.run_jobs(jobs, &opts, extras),
+                Some(_lock) => {
+                    let result = if self.demo.is_some() { self.run_demo_jobs(jobs, extras.licence.is_some()) } else { self.run_jobs(jobs, &opts, extras) };
+                    let _ = std::fs::remove_dir_all(paths::extract_dir());
+                    result
+                }
                 None => Err(anyhow!(t!("worker.other_running"))),
             }
         };
@@ -505,7 +515,6 @@ impl Worker {
                 (Outcome::Failed, t!("worker.install_failed_msg", error = msg))
             }
         };
-        let _ = std::fs::remove_dir_all(paths::extract_dir());
         self.em.send(Event::OpFinished { outcome, summary });
         self.emit_overview();
     }
@@ -523,6 +532,8 @@ impl Worker {
             let zip = self.fetch(&job, step, steps)?;
             match job.kind {
                 JobKind::Editor { force } => {
+                    // Noted before the editor is replaced, in case its uninstall takes module files with it.
+                    let installed_before: Vec<String> = self.rows().into_iter().filter(|r| r.detected).map(|r| r.key).collect();
                     let changed = self.install_editor(&job, &zip, force, step, steps)?;
                     if changed {
                         let version = local::editor_info().display_version.unwrap_or_default();
@@ -536,9 +547,9 @@ impl Worker {
                         let mut follow: Vec<Job> = opts
                             .tracked
                             .iter()
-                            .filter(|k| k.as_str() != EDITOR && !jobs.iter().any(|j| &j.key == *k))
+                            .filter(|k| k.as_str() != EDITOR && installed_before.contains(k) && !jobs.iter().any(|j| &j.key == *k))
                             .filter_map(|k| {
-                                let row = rows.iter().find(|r| &r.key == k && r.detected)?;
+                                let row = rows.iter().find(|r| &r.key == k)?;
                                 Some(Job {
                                     key: k.clone(),
                                     name: row.info.name.clone(),
@@ -622,7 +633,7 @@ impl Worker {
     }
 
     /// The test account's installation: progress like a real one, but nothing is downloaded or changed on the computer.
-    fn run_demo_jobs(&mut self, jobs: Vec<Job>) -> Result<Report> {
+    fn run_demo_jobs(&mut self, jobs: Vec<Job>, licence: bool) -> Result<Report> {
         let mut report = Report::default();
         let steps = jobs.len().max(1);
         for (i, job) in jobs.iter().enumerate() {
@@ -656,6 +667,9 @@ impl Worker {
             }
             report.lines.push(t!("worker.demo_installed_line", name = job.name));
             self.emit_overview();
+        }
+        if licence {
+            report.lines.push(t!("worker.demo_installed_line", name = t!("worker.licence_package")));
         }
         report.lines.push(t!("worker.demo_note").into());
         Ok(report)

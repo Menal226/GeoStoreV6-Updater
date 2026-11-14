@@ -10,7 +10,7 @@ use crate::widgets::{self, icon, Btn};
 use eframe::egui::{self, Align, CornerRadius, Frame, Layout, Margin, RichText, Stroke};
 
 const INTERVALS: [u32; 6] = [1, 2, 4, 8, 12, 24];
-const VALUE_COL: f32 = 200.0;
+const VALUE_COL: f32 = 150.0;
 pub(super) const REPO_URL: &str = "https://github.com/Menal226/GeoStoreV6-Updater";
 
 fn interval_label(h: u32) -> String {
@@ -35,6 +35,7 @@ fn combo<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
 
 fn field_row(ui: &mut egui::Ui, name: &str, value: impl Into<egui::WidgetText>) {
     ui.horizontal(|ui| {
+        ui.set_min_height(32.0);
         ui.allocate_ui_with_layout(egui::vec2(VALUE_COL, 24.0), Layout::left_to_right(Align::Center), |ui| {
             ui.set_width(VALUE_COL);
             ui.label(RichText::new(name).size(14.0).color(MUTED));
@@ -70,19 +71,33 @@ fn label(text: &str) -> RichText {
 
 impl App {
     pub(crate) fn ui_settings(&mut self, ui: &mut egui::Ui) {
+        let saved = self.settings_saved.is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(2500));
         let mut language = None;
-        widgets::page_header(ui, t!("settings.title"), "", None, |ui| language = widgets::language_picker(ui, self.cfg.lang()));
-        if let Some(lang) = language {
-            self.set_language(lang);
-        }
+        widgets::page_header(ui, t!("settings.title"), "", None, |ui| {
+            if saved {
+                widgets::mark_label(ui, widgets::Mark::Success, t!("settings.saved"), 14.0);
+            }
+        });
         let mut changed = false;
 
         widgets::scroll_page(ui, "settings_scroll", |ui| {
-            widgets::card(ui, |ui| {
+            widgets::row_card(ui, false, |ui| {
+                ui.horizontal(|ui| {
+                    ui.set_min_height(32.0);
+                    ui.label(label(t!("lang.label")));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| language = widgets::language_picker(ui, self.cfg.lang()));
+                });
+            });
+            ui.add_space(12.0);
+
+            widgets::row_card(ui, true, |ui| {
                 widgets::card_title(ui, t!("settings.auto_updates.title"));
-                ui.add_space(12.0);
-                changed |= widgets::checkbox(ui, &mut self.cfg.auto_check, label(t!("settings.auto_check")), true).changed();
-                widgets::indented(ui, |ui| {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.set_min_height(32.0);
+                    changed |= widgets::checkbox(ui, &mut self.cfg.auto_check, label(t!("settings.auto_check")), true).changed();
+                });
+                Frame::new().inner_margin(Margin { left: (widgets::CHECK_SIZE + widgets::CHECK_GAP) as i8, ..Default::default() }).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.set_min_height(32.0);
                         ui.add_enabled_ui(self.cfg.auto_check, |ui| {
@@ -135,8 +150,10 @@ impl App {
                         });
                     });
                 });
-                ui.add_space(8.0);
-                changed |= widgets::checkbox(ui, &mut self.cfg.auto_install, label(t!("settings.auto_install")), true).changed();
+                ui.horizontal(|ui| {
+                    ui.set_min_height(32.0);
+                    changed |= widgets::checkbox(ui, &mut self.cfg.auto_install, label(t!("settings.auto_install")), true).changed();
+                });
                 if let Some(err) = &self.task_error {
                     ui.add_space(8.0);
                     ui.label(RichText::new(t!("settings.task_error", err = err)).size(13.0).color(DANGER));
@@ -170,10 +187,10 @@ impl App {
             });
             ui.add_space(12.0);
 
-            widgets::card(ui, |ui| {
+            widgets::row_card(ui, true, |ui| {
                 widgets::card_title(ui, t!("settings.install.title"));
                 ui.add_space(6.0);
-                let folder_w = widgets::button_width(ui, Some(icon::FOLDER), t!("settings.open_folder"));
+                let folder_w = widgets::button_width(ui, Some(icon::FOLDER), t!("settings.open_backups")).max(widgets::button_width(ui, Some(icon::FOLDER), t!("settings.open_downloads")));
                 option_row(
                     ui,
                     folder_w,
@@ -182,18 +199,24 @@ impl App {
                         changed |= widgets::checkbox(ui, &mut self.cfg.backup_konfig, widgets::path_job(t!("settings.backup_konfig"), 14.0, TEXT), true).changed();
                     },
                     |ui| {
-                        if widgets::button(ui, Some(icon::FOLDER), t!("settings.open_folder"), Btn::Secondary, true).clicked() {
+                        if widgets::button_ex(ui, Some(icon::FOLDER), t!("settings.open_backups"), Btn::Secondary, true, folder_w, 28.0).clicked() {
                             App::open(paths::BACKUP_ROOT);
                         }
                     },
                 );
-                ui.add_space(8.0);
                 let dl = paths::downloads_dir();
-                let size: u64 = installer::walk_files(&dl)
-                    .iter()
-                    .filter_map(|p| std::fs::metadata(p).ok())
-                    .map(|m| m.len())
-                    .sum();
+                let size = match self.downloads_size {
+                    Some((at, size)) if at.elapsed() < std::time::Duration::from_secs(2) => size,
+                    _ => {
+                        let size = installer::walk_files(&dl)
+                            .iter()
+                            .filter_map(|p| std::fs::metadata(p).ok())
+                            .map(|m| m.len())
+                            .sum();
+                        self.downloads_size = Some((std::time::Instant::now(), size));
+                        size
+                    }
+                };
                 let delete_w = if size > 0 { widgets::button_width(ui, Some(icon::DELETE), t!("settings.delete")) + ui.spacing().item_spacing.x } else { 0.0 };
                 let busy = self.busy();
                 option_row(
@@ -207,12 +230,14 @@ impl App {
                         }
                     },
                     |ui| {
-                        if size > 0 && widgets::button(ui, Some(icon::DELETE), t!("settings.delete"), Btn::Secondary, !busy).clicked() {
+                        if size > 0 && widgets::button_ex(ui, Some(icon::DELETE), t!("settings.delete"), Btn::Secondary, !busy, 0.0, 28.0).clicked() {
                             for f in installer::walk_files(&dl) {
                                 let _ = std::fs::remove_file(f);
                             }
+                            self.downloads_size = None;
                         }
-                        if widgets::button(ui, Some(icon::FOLDER), t!("settings.open_folder"), Btn::Secondary, true).clicked() {
+                            if widgets::button_ex(ui, Some(icon::FOLDER), t!("settings.open_downloads"), Btn::Secondary, true, folder_w, 28.0).clicked() {
+                            let _ = std::fs::create_dir_all(&dl);
                             App::open(&dl);
                         }
                     },
@@ -220,9 +245,9 @@ impl App {
             });
             ui.add_space(12.0);
 
-            widgets::card(ui, |ui| {
+            widgets::row_card(ui, true, |ui| {
                 widgets::card_title(ui, t!("settings.tracked.title"));
-                ui.add_space(12.0);
+                ui.add_space(6.0);
                 if self.rows.is_empty() {
                     widgets::muted(ui, t!("settings.tracked.not_loaded"));
                 }
@@ -230,6 +255,7 @@ impl App {
                 for row in rows {
                     let mut on = self.cfg.is_tracked(&row.key, row.detected);
                     ui.horizontal(|ui| {
+                        ui.set_min_height(32.0);
                         ui.allocate_ui_with_layout(egui::vec2(VALUE_COL, 24.0), Layout::left_to_right(Align::Center), |ui| {
                             ui.set_width(VALUE_COL);
                             if widgets::checkbox(ui, &mut on, label(&row.info.name), true).changed() {
@@ -238,10 +264,10 @@ impl App {
                         });
                         match &row.local_version {
                             Some(v) if row.detected => {
-                                ui.label(widgets::soft_mono_text(v, 13.0, MONO_INK));
+                                ui.label(RichText::new(t!("dashboard.version", version = v)).size(14.0).color(MUTED));
                             }
                             _ => {
-                                ui.label(RichText::new(t!("settings.tracked.not_found")).size(13.0).color(WARN));
+                                ui.label(RichText::new(t!("settings.tracked.not_found")).size(14.0).color(SUBTLE));
                             }
                         }
                     });
@@ -249,12 +275,12 @@ impl App {
             });
             ui.add_space(12.0);
 
-            widgets::card(ui, |ui| {
+            widgets::row_card(ui, true, |ui| {
                 widgets::card_title(ui, t!("settings.account.title"));
-                ui.add_space(12.0);
+                ui.add_space(6.0);
                 field_row(ui, t!("settings.account.user"), RichText::new(&self.user).size(14.0).color(TEXT));
-                ui.add_space(4.0);
                 ui.horizontal(|ui| {
+                    ui.set_min_height(32.0);
                     ui.horizontal(|ui| {
                         ui.allocate_ui_with_layout(egui::vec2(VALUE_COL, 24.0), Layout::left_to_right(Align::Center), |ui| {
                             ui.set_width(VALUE_COL);
@@ -268,10 +294,10 @@ impl App {
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if self.creds_stored {
-                            if widgets::button(ui, Some(icon::DELETE), t!("settings.account.forget"), Btn::Secondary, true).clicked() {
+                            if widgets::button_ex(ui, Some(icon::DELETE), t!("settings.account.forget"), Btn::Secondary, true, 0.0, 28.0).clicked() {
                                 self.actions.push(Action::ForgetCreds);
                             }
-                        } else if widgets::button(ui, None, t!("settings.save_creds"), Btn::Secondary, true).clicked() {
+                        } else if widgets::button_ex(ui, None, t!("settings.save_creds"), Btn::Secondary, true, 0.0, 28.0).clicked() {
                             self.actions.push(Action::SaveCreds);
                         }
                     });
@@ -279,32 +305,30 @@ impl App {
             });
             ui.add_space(12.0);
 
-            widgets::card(ui, |ui| {
+            widgets::row_card(ui, true, |ui| {
                 widgets::card_title(ui, t!("settings.about.title"));
-                ui.add_space(12.0);
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    field_row(ui, t!("settings.about.version"), widgets::soft_mono_text(env!("CARGO_PKG_VERSION"), 13.0, MONO_INK));
+                    field_row(ui, t!("settings.about.version"), RichText::new(env!("CARGO_PKG_VERSION")).size(14.0).color(TEXT));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if widgets::button(ui, Some(icon::LINK), t!("settings.about.open_github"), Btn::Secondary, true).clicked() {
+                        if widgets::button_ex(ui, Some(icon::LINK), t!("settings.about.open_github"), Btn::Secondary, true, 0.0, 28.0).clicked() {
                             local::open_url(REPO_URL);
                         }
                     });
                 });
-                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     field_row(ui, t!("settings.about.data"), widgets::soft_mono_text(paths::data_dir().display().to_string(), 13.0, MONO_INK));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if widgets::button(ui, Some(icon::FOLDER), t!("settings.open_folder"), Btn::Secondary, true).clicked() {
+                        if widgets::button_ex(ui, Some(icon::FOLDER), t!("settings.open_folder"), Btn::Secondary, true, 0.0, 28.0).clicked() {
                             App::open(paths::data_dir());
                         }
                     });
                 });
-                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     field_row(ui, t!("settings.about.uninstall"), "");
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         let idle = !self.busy() && !self.bg_busy;
-                        if widgets::button(ui, Some(icon::DELETE), t!("settings.about.uninstall_app"), Btn::Secondary, idle).clicked() {
+                        if widgets::button_ex(ui, Some(icon::DELETE), t!("settings.about.uninstall_app"), Btn::Secondary, idle, 0.0, 28.0).clicked() {
                             self.actions.push(Action::Ask(crate::app::Confirm::Uninstall));
                         }
                     });
@@ -315,6 +339,10 @@ impl App {
 
         if changed {
             self.cfg.save();
+            self.settings_saved = Some(std::time::Instant::now());
+        }
+        if let Some(lang) = language {
+            self.set_language(lang);
         }
     }
 }

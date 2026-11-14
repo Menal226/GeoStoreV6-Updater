@@ -63,10 +63,13 @@ fn load_from(target: &str) -> Option<(String, String)> {
             return None;
         }
         let cred = &*ptr;
-        let user = cred.UserName.to_string().unwrap_or_default();
+        let user = if cred.UserName.is_null() { String::new() } else { cred.UserName.to_string().unwrap_or_default() };
         let len = cred.CredentialBlobSize as usize / 2;
-        let words = std::slice::from_raw_parts(cred.CredentialBlob as *const u16, len);
-        let pass = String::from_utf16_lossy(words);
+        let pass = if cred.CredentialBlob.is_null() || len == 0 {
+            String::new()
+        } else {
+            String::from_utf16_lossy(std::slice::from_raw_parts(cred.CredentialBlob as *const u16, len))
+        };
         CredFree(ptr as *const std::ffi::c_void);
         if user.is_empty() {
             None
