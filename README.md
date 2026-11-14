@@ -1,12 +1,14 @@
-# GeoStore Updater
+# GeoStoreV6 Updater
 
-GeoStore Updater hlídá a instaluje aktualizace programu **GeoStore V6** a jeho aplikačních řešení (V6-DTMČR, V6-IG, V6-3D, DWG-DGN a další) přímo z portálu technické podpory [portal.geostore.cz](https://portal.geostore.cz).
+GeoStoreV6 Updater hlídá a instaluje aktualizace programu **GeoStore V6** a jeho aplikačních řešení (V6-DTMČR, V6-IG, V6-3D, DWG-DGN a další) přímo z portálu technické podpory [portal.geostore.cz](https://portal.geostore.cz).
 
 Místo ručního stahování balíčků z portálu stačí:
 
 - jednou se přihlásit,
 - nechat aplikaci běžet na pozadí,
 - a když vyjde nová verze, kliknout na **Aktualizovat** – nebo nechat aplikaci, ať aktualizace nainstaluje sama.
+
+> **Upozornění:** GeoStoreV6 Updater je neoficiální aplikace nezávislého autora. Není produktem společnosti GEOVAP, spol. s r.o., není s ní nijak spojena a společnost GEOVAP ji nevytvořila, neschválila ani nepodporuje. Podrobnosti najdete v části [Právní upozornění](#právní-upozornění).
 
 ## Obsah
 
@@ -23,7 +25,8 @@ Místo ručního stahování balíčků z portálu stačí:
 11. [Kde aplikace ukládá data](#kde-aplikace-ukládá-data)
 12. [Odinstalace](#odinstalace)
 13. [Řešení problémů](#řešení-problémů)
-14. [Kontakt](#kontakt)
+14. [Právní upozornění](#právní-upozornění)
+15. [Kontakt](#kontakt)
 
 ## Požadavky
 
@@ -80,7 +83,7 @@ Stránka **Přehled** ukazuje všechny sledované balíčky. Pro každý balíč
 - **Označit jako aktuální** – pokud jste balíček aktualizovali jinak (ručně), aplikace jej přestane hlásit jako zastaralý.
 - **Přestat sledovat** / **Sledovat aktualizace** – určuje, zda aplikace u balíčku hlídá aktualizace.
 
-> **Poznámka:** Dokud aplikace balíček sama nenainstaluje, odhaduje jeho stav podle data souborů v počítači. Po první instalaci přes GeoStore Updater je stav přesný.
+> **Poznámka:** Dokud aplikace balíček sama nenainstaluje, odhaduje jeho stav podle data souborů v počítači. Po první instalaci přes GeoStoreV6 Updater je stav přesný.
 
 ## Instalace aktualizací
 
@@ -163,22 +166,22 @@ Verze aplikace, odkaz na tuto stránku na GitHubu, složka s daty aplikace a tla
 
 ## Běh na pozadí a oznámení
 
-GeoStore Updater běží na pozadí i po zavření okna. Ikonu najdete v **oznamovací oblasti** vpravo dole na hlavním panelu (případně pod šipkou **^**).
+GeoStoreV6 Updater běží na pozadí i po zavření okna. Ikonu najdete v **oznamovací oblasti** vpravo dole na hlavním panelu (případně pod šipkou **^**).
 
 - **Kliknutím na ikonu** otevřete okno aplikace.
 - **Pravým tlačítkem** otevřete nabídku:
-  - **Otevřít GeoStore Updater**
+  - **Otevřít GeoStoreV6 Updater**
   - **Zkontrolovat aktualizace** – okamžitá kontrola, výsledek se zobrazí jako oznámení
   - **Ukončit** – vypne běh na pozadí do příštího přihlášení do Windows nebo do dalšího otevření aplikace
 - Najetím myší na ikonu uvidíte čas další kontroly.
 
 Když aplikace najde aktualizaci, zobrazí **oznámení Windows**. Kliknutím na oznámení otevřete aplikaci. Pokud je zapnutá automatická instalace, oznámení přijde až po dokončení instalace. Pokud je potřeba zavřít GeoStore V6, aplikace vás na to upozorní.
 
-Běh na pozadí se spouští automaticky **při každém přihlášení do Windows**. Nastaví se sám při prvním spuštění aplikace (jako naplánovaná úloha „GeoStore Updater“) a nevyžaduje žádné potvrzování.
+Běh na pozadí se spouští automaticky **při každém přihlášení do Windows**. Nastaví se sám při prvním spuštění aplikace (jako naplánovaná úloha „GeoStoreV6 Updater“) a nevyžaduje žádné potvrzování.
 
 ## Aktualizace samotné aplikace
 
-GeoStore Updater si nové verze sám hlídá na GitHubu. Novou verzi stáhne na pozadí a použije ji při příštím spuštění. Nemusíte nic dělat ani nic stahovat ručně. Aktuální verzi aplikace najdete v **Nastavení → O aplikaci**.
+GeoStoreV6 Updater si nové verze sám hlídá na GitHubu. Novou verzi stáhne na pozadí a použije ji při příštím spuštění. Nemusíte nic dělat ani nic stahovat ručně. Aktuální verzi aplikace najdete v **Nastavení → O aplikaci**.
 
 ## Kde aplikace ukládá data
 
@@ -221,6 +224,16 @@ V nabídce **⋯** u balíčku zvolte **Označit jako aktuální**.
 
 **Kde najdu podrobnosti o tom, co se při instalaci stalo?**
 Na stránce **Historie → Protokoly → Celý protokol aplikace**.
+
+## Právní upozornění
+
+GeoStoreV6 Updater je neoficiální aplikace nezávislého autora. Není produktem společnosti GEOVAP, spol. s r.o., není s ní nijak spojena a společnost GEOVAP ji nevytvořila, neschválila ani nepodporuje.
+
+GeoStore V6, GEOVAP a názvy aplikačních řešení jsou ochranné známky nebo obchodní názvy jejich vlastníků. Aplikace je používá jen k označení programu, se kterým pracuje.
+
+Instalační balíčky a licence aplikace stahuje z portálu [portal.geostore.cz](https://portal.geostore.cz) a systému licman pod vaším vlastním účtem. Jejich používání se řídí vašimi smluvními podmínkami se společností GEOVAP. S dotazy k této aplikaci se obracejte na jejího autora, ne na technickou podporu GEOVAP.
+
+Aplikace se poskytuje „tak, jak je“, bez jakýchkoli záruk, podle licence [Apache 2.0](LICENSE). Autor neodpovídá za škody vzniklé jejím používáním, včetně ztráty dat nebo nefunkční instalace GeoStore V6.
 
 ## Kontakt
 V případě potřeby je možno mně kontaktovat [zde](mailto:gsupdater@menal.net)

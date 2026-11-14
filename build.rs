@@ -41,8 +41,8 @@ fn main() {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/icon.ico");
         res.set_manifest(&MANIFEST_ADMIN.replace("__LEVEL__", level));
-        res.set("FileDescription", "GeoStore Updater");
-        res.set("ProductName", "GeoStore Updater");
+        res.set("FileDescription", "GeoStoreV6 Updater");
+        res.set("ProductName", "GeoStoreV6 Updater");
         res.set("CompanyName", "");
         res.compile().expect("failed to compile Windows resources");
     }

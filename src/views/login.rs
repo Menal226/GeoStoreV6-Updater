@@ -10,7 +10,7 @@ impl App {
             .frame(Frame::new().fill(BG))
             .show(ctx, |ui| {
                 let width = 400.0;
-                let height = 480.0;
+                let height = 510.0;
                 ui.add_space(((ui.available_height() - height) / 2.0).max(24.0));
                 ui.horizontal(|ui| {
                     ui.add_space(((ui.available_width() - width) / 2.0).max(16.0));
@@ -40,7 +40,7 @@ impl App {
         ui.vertical_centered(|ui| {
             ui.image((self.logo.id(), egui::vec2(48.0, 48.0)));
             ui.add_space(16.0);
-            ui.label(RichText::new("GeoStore Updater").size(22.0).color(TEXT));
+            ui.label(RichText::new("GeoStoreV6 Updater").size(22.0).color(TEXT));
             ui.add_space(4.0);
             ui.label(RichText::new(t!("login.subtitle")).size(13.5).color(MUTED));
         });
@@ -103,6 +103,10 @@ impl App {
                 self.actions.push(Action::Login);
             }
         }
+        ui.add_space(20.0);
+        ui.vertical_centered(|ui| {
+            ui.label(RichText::new(t!("login.disclaimer")).size(12.5).color(MUTED));
+        });
         ui.add_space(4.0);
     }
 }

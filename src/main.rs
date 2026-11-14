@@ -25,7 +25,7 @@ use eframe::egui;
 use std::fs::{File, OpenOptions};
 use std::os::windows::fs::OpenOptionsExt;
 
-const WINDOW_TITLE: &str = "GeoStore Updater";
+const WINDOW_TITLE: &str = "GeoStoreV6 Updater";
 
 fn acquire_instance_lock() -> std::io::Result<File> {
     let path = paths::data_dir().join("instance.lock");

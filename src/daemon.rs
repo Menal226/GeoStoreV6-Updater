@@ -153,7 +153,7 @@ fn status_tip(cfg: &Config, activity: &str, no_creds: bool) -> String {
             t!("tray.next_check", when = fmt::datetime(next))
         }
     };
-    format!("GeoStore Updater\n{line}")
+    format!("GeoStoreV6 Updater\n{line}")
 }
 
 fn open_window() {

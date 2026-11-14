@@ -114,6 +114,15 @@ const SECTIONS: &[(&str, &[Block])] = &[
             Q("help.troubleshooting.q6", "help.troubleshooting.a6"),
         ],
     ),
+    (
+        "help.legal.title",
+        &[
+            P("help.legal.p1"),
+            P("help.legal.p2"),
+            P("help.legal.p3"),
+            P("help.legal.p4"),
+        ],
+    ),
 ];
 
 /// Text with **bold** runs; paths and file names in the rest are set in mono.
